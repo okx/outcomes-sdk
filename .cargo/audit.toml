@@ -1,0 +1,19 @@
+# cargo-audit configuration (https://github.com/rustsec/rustsec/tree/main/cargo-audit)
+#
+# Run `cargo audit` from the repo root to honor these settings.
+#
+# The two advisories below are "unmaintained" warnings (informational), not
+# vulnerabilities. Both crates are transitive build-time deps pulled in via the
+# `alloy-*` stack; neither is reachable in a way that affects runtime security,
+# so they are explicitly accepted here rather than silently passed over. Revisit
+# when the upstream alloy crates drop them.
+
+[advisories]
+ignore = [
+    # `derivative` (proc-macro, unmaintained) — transitive via alloy. Compile-time
+    # only; generates trait impls, no runtime attack surface.
+    "RUSTSEC-2024-0388",
+    # `paste` (proc-macro, unmaintained) — transitive via alloy. Compile-time only
+    # token pasting; no runtime attack surface.
+    "RUSTSEC-2024-0436",
+]

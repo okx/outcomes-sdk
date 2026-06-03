@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# Local environment / secrets — never commit
+.env
+.env.*
+
+# Logs
+*.log
