@@ -6,7 +6,8 @@
 // Envelope
 // ---------------------------------------------------------------------------
 
-/// Generic WS push envelope.
+/// Generic WS push envelope for **public** channels, whose `data` is an array
+/// of items.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct WsPushEnvelope<T> {
     pub arg: WsArg,
@@ -14,6 +15,16 @@ pub struct WsPushEnvelope<T> {
     /// Only present for pm-books channel (snapshot / update).
     #[serde(default)]
     pub action: Option<String>,
+}
+
+/// Push envelope for **private** channels (`pm-order`, `pm-position`,
+/// `pm-user-trade`, `pm-balance`, `pm-pnl`), whose `data` is a single object
+/// rather than an array. This differs from the public channels (see
+/// [`WsPushEnvelope`]) — confirmed against the live backend.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct WsPrivatePushEnvelope<T> {
+    pub arg: WsArg,
+    pub data: T,
 }
 
 /// Subscription arg in the push envelope.
@@ -591,16 +602,17 @@ pub enum WsMessage {
     /// layout as the REST `get_candles` response). See
     /// [`crate::models::price::Candle`] for accessor methods.
     Candle(Vec<crate::models::price::Candle>),
-    /// `pm-order` — user order status changes.
-    Orders(Vec<WsOrder>),
-    /// `pm-position` — user position changes.
-    Positions(Vec<WsPosition>),
-    /// `pm-user-trade` — user trade execution details.
-    UserTrades(Vec<WsUserTrade>),
-    /// `pm-balance` — user balance changes.
-    Balance(Vec<WsBalance>),
-    /// `pm-pnl` — floating P&L.
-    Pnl(Vec<WsPnl>),
+    /// `pm-order` — user order status change. Private channels push a single
+    /// object in `data` (not an array), so this carries one item per message.
+    Orders(WsOrder),
+    /// `pm-position` — user position change (single object per message).
+    Positions(WsPosition),
+    /// `pm-user-trade` — user trade execution detail (single object per message).
+    UserTrades(WsUserTrade),
+    /// `pm-balance` — user balance change (single object per message).
+    Balance(WsBalance),
+    /// `pm-pnl` — floating P&L (single object per message).
+    Pnl(WsPnl),
     /// Unknown channel — raw JSON for fallback rendering.
     Unknown {
         channel: String,
@@ -674,24 +686,26 @@ pub fn parse_ws_message(channel: &str, payload: &str) -> Option<WsMessage> {
             let env: WsPushEnvelope<WsEventStatus> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::EventStatus(env.data))
         }
+        // Private channels push a single object in `data` (not an array),
+        // so they use `WsPrivatePushEnvelope<T>`.
         "pm-order" => {
-            let env: WsPushEnvelope<WsOrder> = serde_json::from_str(payload).ok()?;
+            let env: WsPrivatePushEnvelope<WsOrder> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::Orders(env.data))
         }
         "pm-position" => {
-            let env: WsPushEnvelope<WsPosition> = serde_json::from_str(payload).ok()?;
+            let env: WsPrivatePushEnvelope<WsPosition> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::Positions(env.data))
         }
         "pm-user-trade" => {
-            let env: WsPushEnvelope<WsUserTrade> = serde_json::from_str(payload).ok()?;
+            let env: WsPrivatePushEnvelope<WsUserTrade> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::UserTrades(env.data))
         }
         "pm-balance" => {
-            let env: WsPushEnvelope<WsBalance> = serde_json::from_str(payload).ok()?;
+            let env: WsPrivatePushEnvelope<WsBalance> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::Balance(env.data))
         }
         "pm-pnl" => {
-            let env: WsPushEnvelope<WsPnl> = serde_json::from_str(payload).ok()?;
+            let env: WsPrivatePushEnvelope<WsPnl> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::Pnl(env.data))
         }
         ch if ch.starts_with("pm-candle") || ch.starts_with("candle") => {
@@ -1058,6 +1072,38 @@ mod tests {
         assert_eq!(trade.client_order_id.as_deref(), Some("cli-abc-123"));
         assert_eq!(trade.asset_id, "71");
         assert_eq!(trade.trade_id, "9876543210");
+    }
+
+    #[test]
+    fn private_channel_data_is_a_single_object_not_an_array() {
+        // Backend-confirmed: private channels push `data` as a single object,
+        // unlike public channels (which push an array). Exact pm-order sample
+        // from the backend team.
+        let json = r#"{"arg":{"channel":"pm-order","uid":"833716700243015245"},"data":{"assetId":"101665000","clientOrderId":"0x0146500a4bc3ddd0110185db4827b957","direction":"YES","limitPrice":"0.1000","marketId":"101665","oddsType":"points","orderId":"28209650","orderSize":"10","side":"BUY","status":"ACTIVE","txHash":"0x03a33c5a0607e928fdb5c8eae13bf3d4fde1fc3d276d22ea5bf0c7c41530f11a"}}"#;
+        let msg = parse_ws_message("pm-order", json).expect("parse");
+        match msg {
+            WsMessage::Orders(order) => {
+                assert_eq!(order.order_id, "28209650");
+                assert_eq!(order.market_id, "101665");
+                assert_eq!(order.status, OrderStatus::Active);
+                assert_eq!(order.side, OrderSide::Buy);
+                assert_eq!(order.direction, Some(Direction::Yes));
+                assert_eq!(order.odds_type, Some(OddsType::Points));
+                assert_eq!(
+                    order.client_order_id.as_deref(),
+                    Some("0x0146500a4bc3ddd0110185db4827b957")
+                );
+            }
+            other => panic!("expected WsMessage::Orders(single), got {other:?}"),
+        }
+
+        // An array-shaped `data` (the public-channel shape) must NOT parse for
+        // a private channel anymore.
+        let array_shaped = r#"{"arg":{"channel":"pm-order","uid":"1"},"data":[{"orderId":"1","marketId":"2","status":"ACTIVE","side":"BUY"}]}"#;
+        assert!(
+            parse_ws_message("pm-order", array_shaped).is_none(),
+            "private channel must reject array-shaped data"
+        );
     }
 
     #[test]

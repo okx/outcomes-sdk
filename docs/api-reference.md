@@ -921,7 +921,7 @@ Subscribe with empty params (the server scopes the stream to the logged-in accou
 Order status changes.
 
 - **Subscribe params:** `[]`.
-- **Message variant:** `WsMessage::Orders(Vec<WsOrder>)`.
+- **Message variant:** `WsMessage::Orders(WsOrder)`.
 
 ```rust
 struct WsOrder {
@@ -953,7 +953,7 @@ struct WsOrder {
 Position updates.
 
 - **Subscribe params:** `[]`.
-- **Message variant:** `WsMessage::Positions(Vec<WsPosition>)`.
+- **Message variant:** `WsMessage::Positions(WsPosition)`.
 
 The spec defines two payload variants on this channel; `WsPosition` is
 a single flat struct with variant-specific fields behind `Option`. Branch
@@ -997,7 +997,7 @@ struct WsPositionExt {
 User-specific fill stream.
 
 - **Subscribe params:** `[]`.
-- **Message variant:** `WsMessage::UserTrades(Vec<WsUserTrade>)`.
+- **Message variant:** `WsMessage::UserTrades(WsUserTrade)`.
 
 ```rust
 struct WsUserTrade {
@@ -1020,7 +1020,7 @@ struct WsUserTrade {
 Balance changes.
 
 - **Subscribe params:** `[]`.
-- **Message variant:** `WsMessage::Balance(Vec<WsBalance>)`.
+- **Message variant:** `WsMessage::Balance(WsBalance)`.
 
 ```rust
 struct WsBalance {
@@ -1044,7 +1044,7 @@ as a serde `untagged` enum so the right variant is picked automatically
 based on which discriminating fields are present.
 
 - **Subscribe params:** `[]`.
-- **Message variant:** `WsMessage::Pnl(Vec<WsPnl>)`.
+- **Message variant:** `WsMessage::Pnl(WsPnl)`.
 
 ```rust
 enum WsPnl {

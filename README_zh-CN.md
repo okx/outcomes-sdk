@@ -366,12 +366,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 let ws = OutcomesWsClient::new();
+// 私有频道每条消息推送的是单个对象（不是数组），因此每个变体只携带一个条目。
 ws.set_on_data(Arc::new(|msg: &WsMessage| match msg {
-    WsMessage::Orders(orders)       => println!("{} order updates", orders.len()),
-    WsMessage::Positions(positions) => println!("{} position updates", positions.len()),
-    WsMessage::Balance(b)           => println!("{} balance updates", b.len()),
-    WsMessage::UserTrades(fills)    => println!("{} user fills", fills.len()),
-    WsMessage::Pnl(pnl)             => println!("{} pnl updates", pnl.len()),
+    WsMessage::Orders(order)       => println!("order {} -> {:?}", order.order_id, order.status),
+    WsMessage::Positions(position) => println!("position update on market {}", position.market_id),
+    WsMessage::Balance(b)          => println!("balance update: {:?}", b.change_type),
+    WsMessage::UserTrades(fill)    => println!("fill on order {}", fill.order_id),
+    WsMessage::Pnl(pnl)            => println!("pnl update: {pnl:?}"),
     _ => {}
 }));
 
@@ -387,6 +388,7 @@ ws.subscribe("pm-balance",    vec![]).await?;
 - `login` 会阻塞，直到服务端确认（成功）或拒绝（返回携带 OKX 错误码的 `SdkError::WebSocket`）。30 s 后超时，与 OKX 文档中的登录有效期一致。
 - 登录签名由 SDK 内部计算（`Base64(HMAC-SHA256(secret_key, timestamp + "GET" + "/users/self/verify"))`）；你只需提供与 REST 相同的 `ApiCredentials`。
 - 凭证会缓存在客户端，并在重连时自动重放，因此偶发的断连不需要用户代码再次鉴权。
+- 与公共频道（`data` 为数组）不同，私有频道每条消息推送的是**单个对象**，因此每个私有 `WsMessage` 变体只携带一个条目（例如 `WsMessage::Orders(WsOrder)`）。
 
 各私有频道对应的 `WsMessage` 变体：
 
