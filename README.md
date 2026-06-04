@@ -367,12 +367,14 @@ Private channels stream the authenticated account's own order, position, balance
 
 ```rust
 let ws = OutcomesWsClient::new();
+// Private channels push a single object per message (not an array), so each
+// variant carries one item.
 ws.set_on_data(Arc::new(|msg: &WsMessage| match msg {
-    WsMessage::Orders(orders)       => println!("{} order updates", orders.len()),
-    WsMessage::Positions(positions) => println!("{} position updates", positions.len()),
-    WsMessage::Balance(b)           => println!("{} balance updates", b.len()),
-    WsMessage::UserTrades(fills)    => println!("{} user fills", fills.len()),
-    WsMessage::Pnl(pnl)             => println!("{} pnl updates", pnl.len()),
+    WsMessage::Orders(order)      => println!("order {} -> {:?}", order.order_id, order.status),
+    WsMessage::Positions(position) => println!("position update on market {}", position.market_id),
+    WsMessage::Balance(b)         => println!("balance update: {:?}", b.change_type),
+    WsMessage::UserTrades(fill)   => println!("fill on order {}", fill.order_id),
+    WsMessage::Pnl(pnl)           => println!("pnl update: {pnl:?}"),
     _ => {}
 }));
 
@@ -388,6 +390,7 @@ Notes:
 - `login` blocks until the server confirms (success) or rejects (returns an `SdkError::WebSocket` carrying the OKX error code). It times out after 30 s, matching OKX's documented login expiry.
 - The SDK computes the login signature internally (`Base64(HMAC-SHA256(secret_key, timestamp + "GET" + "/users/self/verify"))`); you only supply the same `ApiCredentials` used for REST.
 - Credentials are cached on the client and replayed automatically on reconnect, so a transient disconnect does not require user code to re-authenticate.
+- Unlike public channels (whose `data` is an array), private channels push a **single object** per message, so each private `WsMessage` variant carries one item (e.g. `WsMessage::Orders(WsOrder)`).
 
 Private channels and their `WsMessage` variants:
 

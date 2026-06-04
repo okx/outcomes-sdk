@@ -918,7 +918,7 @@ K 线流。频道名编码了 bar: `pm-candle1m`、`pm-candle5m`、`pm-candle1H`
 订单状态变更。
 
 - **订阅参数:** `[]`。
-- **消息变体:** `WsMessage::Orders(Vec<WsOrder>)`。
+- **消息变体:** `WsMessage::Orders(WsOrder)`。
 
 ```rust
 struct WsOrder {
@@ -949,7 +949,7 @@ struct WsOrder {
 持仓更新。
 
 - **订阅参数:** `[]`。
-- **消息变体:** `WsMessage::Positions(Vec<WsPosition>)`。
+- **消息变体:** `WsMessage::Positions(WsPosition)`。
 
 该频道有两种 payload 变体;`WsPosition` 用单一扁平 struct 表示,
 变体相关字段都放在 `Option` 里。基于 `status` 分支判断(可用
@@ -993,7 +993,7 @@ struct WsPositionExt {
 用户自身的成交流。
 
 - **订阅参数:** `[]`。
-- **消息变体:** `WsMessage::UserTrades(Vec<WsUserTrade>)`。
+- **消息变体:** `WsMessage::UserTrades(WsUserTrade)`。
 
 ```rust
 struct WsUserTrade {
@@ -1016,7 +1016,7 @@ struct WsUserTrade {
 余额变更。
 
 - **订阅参数:** `[]`。
-- **消息变体:** `WsMessage::Balance(Vec<WsBalance>)`。
+- **消息变体:** `WsMessage::Balance(WsBalance)`。
 
 ```rust
 struct WsBalance {
@@ -1039,7 +1039,7 @@ struct WsBalance {
 根据存在的字段自动选择正确变体。
 
 - **订阅参数:** `[]`。
-- **消息变体:** `WsMessage::Pnl(Vec<WsPnl>)`。
+- **消息变体:** `WsMessage::Pnl(WsPnl)`。
 
 ```rust
 enum WsPnl {
