@@ -11,9 +11,8 @@ use alloy_signer_local::PrivateKeySigner;
 use k256::ecdsa::SigningKey;
 
 use super::action::Action;
-use super::eip712::{
-    agent_struct_hash, chain_env, domain_separator, eip712_signing_hash, DOMAIN_CHAIN_TYPE,
-};
+use super::chain_type::ChainType;
+use super::eip712::{agent_struct_hash, domain_separator, eip712_signing_hash, DOMAIN_CHAIN_TYPE};
 use super::hex::{hex_decode, hex_encode};
 use super::msgpack::{build_unsigned_tx_msgpack, connection_id};
 
@@ -67,11 +66,11 @@ pub fn sign_action_full(
     nonce: u64,
     expires_after: Option<u64>,
     user: Option<&str>,
+    chain: ChainType,
     key: &SigningKey,
 ) -> Result<(String, String, String, u8), String> {
-    let source_chain = chain_env();
     let conn_id = connection_id(action, nonce, expires_after, user)?;
-    let struct_hash = agent_struct_hash(source_chain.source(), &conn_id);
+    let struct_hash = agent_struct_hash(chain.source(), &conn_id);
     let digest = eip712_signing_hash(DOMAIN_CHAIN_TYPE.chain_id(), struct_hash);
     let (r, s, v) = sign_digest_parts(&digest, key)?;
     Ok((
@@ -88,11 +87,11 @@ pub fn sign_action(
     nonce: u64,
     expires_after: Option<u64>,
     user: Option<&str>,
+    chain: ChainType,
     key: &SigningKey,
 ) -> Result<String, String> {
-    let source_chain = chain_env();
     let conn_id = connection_id(action, nonce, expires_after, user)?;
-    let struct_hash = agent_struct_hash(source_chain.source(), &conn_id);
+    let struct_hash = agent_struct_hash(chain.source(), &conn_id);
     let digest = eip712_signing_hash(DOMAIN_CHAIN_TYPE.chain_id(), struct_hash);
     let (r, s, v) = sign_digest_parts(&digest, key)?;
     // Reassemble the 65-byte hex blob the OKX `sign_action` consumers expect.
@@ -114,15 +113,15 @@ pub fn sign_action_debug(
     nonce: u64,
     expires_after: Option<u64>,
     user: Option<&str>,
+    chain: ChainType,
     key: &SigningKey,
 ) -> Result<SigningDebug, String> {
-    let source_chain = chain_env();
     let domain_chain_id = DOMAIN_CHAIN_TYPE.chain_id();
     let conn_id = connection_id(action, nonce, expires_after, user)?;
     let ds = domain_separator(domain_chain_id);
-    let sh = agent_struct_hash(source_chain.source(), &conn_id);
+    let sh = agent_struct_hash(chain.source(), &conn_id);
     let digest = eip712_signing_hash(domain_chain_id, sh);
-    let sig = sign_action(action, nonce, expires_after, user, key)?;
+    let sig = sign_action(action, nonce, expires_after, user, chain, key)?;
     let addr = signer_address(key);
 
     let serialized_bytes = build_unsigned_tx_msgpack(action, nonce, expires_after, user);

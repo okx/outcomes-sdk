@@ -38,14 +38,14 @@ sol! {
 ///
 /// This domain is deliberately weak as an app/deployment binding: the
 /// `verifying_contract` is [`Address::ZERO`] and `chain_id` is always the
-/// compiled-in [`DOMAIN_CHAIN_TYPE`] (Mainnet), not the runtime
-/// [`chain_env`](super::eip712::chain_env). It therefore does **not** by itself
-/// prevent a signed payload from being replayed across deployments or chains.
-/// Replay/uniqueness protection instead relies on the msgpack-derived
-/// `connectionId` (which hashes the full action bytes) together with the Agent
-/// `source` string. Any change to that assumption — e.g. binding `chain_id` to
-/// the real `chain_env()` and setting a real `verifying_contract` — is a
-/// signing-compatibility change and must be coordinated with the backend.
+/// compiled-in [`DOMAIN_CHAIN_TYPE`] (Mainnet), not the caller-supplied signing
+/// chain. It therefore does **not** by itself prevent a signed payload from
+/// being replayed across deployments or chains. Replay/uniqueness protection
+/// instead relies on the msgpack-derived `connectionId` (which hashes the full
+/// action bytes) together with the Agent `source` string. Any change to that
+/// assumption — e.g. binding `chain_id` to the caller's chain and setting a
+/// real `verifying_contract` — is a signing-compatibility change and must be
+/// coordinated with the backend.
 fn domain(chain_id: u64) -> Eip712Domain {
     eip712_domain! {
         name: DOMAIN_NAME,
@@ -78,17 +78,4 @@ pub(crate) fn eip712_signing_hash(chain_id: u64, struct_hash: [u8; 32]) -> [u8; 
     buf.extend_from_slice(&domain_separator(chain_id));
     buf.extend_from_slice(&struct_hash);
     alloy_primitives::keccak256(buf).into()
-}
-
-/// Resolve the Agent-source ChainType from env vars.
-///
-/// IMPORTANT: This only governs the Agent `source` string. The EIP-712
-/// domain chain ID is always [`DOMAIN_CHAIN_TYPE`] regardless of env.
-pub(crate) fn chain_env() -> ChainType {
-    if let Ok(chain) = std::env::var("OUTCOMES_CHAIN") {
-        if chain.eq_ignore_ascii_case("testnet") {
-            return ChainType::Testnet;
-        }
-    }
-    ChainType::Mainnet
 }

@@ -13,7 +13,7 @@
 
 ### 客户端构造
 
-模块: `okx_outcomes_sdk::{OutcomesSdkClient, ApiCredentials}`。
+模块: `okx_outcomes_sdk::{OutcomesSdkClient, OutcomesSdkClientBuilder, TradingMode, ApiCredentials}`。
 
 ```rust
 pub struct ApiCredentials {
@@ -22,13 +22,26 @@ pub struct ApiCredentials {
     pub passphrase: String, // OK-ACCESS-PASSPHRASE 请求头的值
 }
 
+pub enum TradingMode { Points } // X-Predictions-Mode 请求头
+
 impl OutcomesSdkClient {
-    pub fn with_credentials(creds: ApiCredentials) -> Self;
+    pub fn builder() -> OutcomesSdkClientBuilder;
+    pub fn with_credentials(creds: ApiCredentials) -> Self;            // 快捷方式
     pub fn with_credentials_and_url(creds: ApiCredentials, base_url: impl Into<String>) -> Self;
+}
+
+impl OutcomesSdkClientBuilder {
+    pub fn credentials(self, creds: ApiCredentials) -> Self;
+    pub fn base_url(self, base_url: impl Into<String>) -> Self;       // 默认 https://www.okx.com
+    pub fn mode(self, mode: TradingMode) -> Self;                     // 未设置则省略
+    pub fn accept_language(self, lang: impl Into<String>) -> Self;    // Accept-Language (BCP-47)
+    pub fn timeout_secs(self, secs: u64) -> Self;                     // 默认 10
+    pub fn debug(self, debug: bool) -> Self;                          // 仅 debug 构建生效
+    pub fn build(self) -> OutcomesSdkClient;
 }
 ```
 
-Base URL 解析顺序:传给 `with_credentials_and_url` 的显式参数 > `OUTCOMES_API_BASE` 环境变量 > `https://www.okx.com`。Endpoint 常量是完整的绝对路径(`/api/v5/predictions/...`、`/api/v5/market/...`),与 base URL 拼接,因此一个主机配置同时覆盖 Outcomes 与市场数据两类调用。
+Base URL 解析:显式的 `.base_url(..)` builder 值(或 `with_credentials_and_url` 参数),否则使用编译期默认值 `https://www.okx.com`。SDK 不读取任何环境变量。Endpoint 常量是完整的绝对路径(`/api/v5/predictions/...`、`/api/v5/market/...`),与 base URL 拼接,因此一个主机配置同时覆盖 Outcomes 与市场数据两类调用。
 
 ### 错误
 
@@ -237,7 +250,7 @@ pub async fn get_balance(&self) -> Result<BalanceResponse, SdkError>;
 pub type BalanceResponse = Vec<BalanceEntry>;
 
 pub struct BalanceEntry {
-    odds_type: OddsType, // Spots / Points / Unknown
+    odds_type: OddsType, // Points / Unknown
     balance:   String, // 总余额(单位由 odds_type 决定)
     available: String, // 可用余额(总余额 - 被未成交订单冻结的金额)
 }
@@ -273,7 +286,7 @@ struct OrderItem {
     asset_id:        String,           // 结果 assetId
     side:            SigningOrderSide, // Buy / Sell(下单侧小写 wire,字节用于 EIP-712 哈希)
     market_type:     String,           // 始终为 "prediction"
-    client_order_id: Option<String>,   // 34 字符客户端订单 ID;见签名 > 客户端订单 ID
+    client_order_id: String,           // 必填;34 字符客户端订单 ID;见签名 > 客户端订单 ID
     price:           String,           // [0, 1] 区间内的十进制
     reduce_only:     bool,
     size:            String,           // 十进制
@@ -399,7 +412,7 @@ pub struct OrderRecord {
     filled_amount:   String,          // 十进制
     fail_reason:     Option<String>,  // 仅当 status == RestOrderStatus::Failed 时出现
     cancel_reason:   Option<String>,  // 服务端发起撤单时设置(心跳超时、市场结算等)
-    odds_type:       OddsType,        // Spots / Points / Unknown
+    odds_type:       OddsType,        // Points / Unknown
     created_at:      String,         // Unix ms(字符串)
     updated_at:      String,         // Unix ms(字符串)
 }
@@ -468,8 +481,8 @@ pub struct PositionRecord {
     cur_price:                  String,         // 当前代币价格
     realized_pnl:               String,         // 已实现盈亏
     realized_pnl_percentage:    String,
-    odds_type:                  OddsType,       // Spots / Points / Unknown
-                                                 //(已经线上验证:wire 值为 "points" 或 "spots",不是 "real")
+    odds_type:                  OddsType,       // Points / Unknown
+                                                 //(已经线上验证:wire 值为 "points")
 }
 ```
 
@@ -692,7 +705,7 @@ pub mod ws::endpoints {
 }
 ```
 
-`OutcomesWsClient` 默认使用 `DEFAULT_WS_HOST`;可通过 `OutcomesWsClient::with_host(...)` 或 `OUTCOMES_WS_HOST` 环境变量覆盖。
+`OutcomesWsClient` 默认使用 `DEFAULT_WS_HOST`;可通过 `OutcomesWsClient::builder().host(...).build()`(或 `with_host(...)` 快捷方式)覆盖。调试日志通过 `.debug(true)` 开启。SDK 不读取任何环境变量。
 
 生命周期与韧性:
 
@@ -1084,6 +1097,7 @@ pub fn sign_to_wrapper(
     action:        &Action,
     nonce:         u64,
     expires_after: Option<u64>,
+    chain:         ChainType,   // Mainnet / Testnet —— Agent `source`,显式传入
     key:           &SigningKey,
 ) -> Result<SignatureWrapper, String>;
 ```
@@ -1143,7 +1157,7 @@ pub fn parse_client_order_id_prefix(client_order_id: Option<&str>) -> ClientOrde
 pub fn register_client_order_id_context(region: Region, env: Env);
 ```
 
-客户端订单 ID 是 34 字符的十六进制字符串,形如 `0x{region}{env}{30 位十六进制随机数}`。`generate_client_order_id_default()` 读取已注册的全局上下文(默认是 HK / PROD)。若需要不同的上下文,在启动时注册一次即可覆盖。
+客户端订单 ID 是 34 字符的十六进制字符串,形如 `0x{region}{env}{30 位十六进制随机数}`。`generate_client_order_id_default()` 使用已注册的全局上下文,否则使用编译期默认值 HK / PROD(SDK 不读取任何环境变量)。在启动时调用 `register_client_order_id_context(region, env)` 覆盖一次,或把值显式传给 `generate_client_order_id(region, env)`。
 
 低阶 helper:
 

@@ -40,6 +40,6 @@ pub mod signing;
 #[cfg(feature = "websocket")]
 pub mod ws;
 
-pub use client::{ApiCredentials, OutcomesSdkClient};
+pub use client::{ApiCredentials, OutcomesSdkClient, OutcomesSdkClientBuilder, TradingMode};
 pub use error::SdkError;
 pub use models::common::EcdsaSignature;

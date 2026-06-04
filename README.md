@@ -164,7 +164,7 @@ use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};
 use okx_outcomes_sdk::models::order::{OrderItem, PlaceOrderAction, PlaceOrderRequest};
 use okx_outcomes_sdk::signing::{
     action_place_order, generate_client_order_id_default, now_millis, parse_private_key, sign_to_wrapper,
-    LimitOrderType, LimitTif, OrderRequest, OrderType, SigningOrderSide, SizeType,
+    ChainType, LimitOrderType, LimitTif, OrderRequest, OrderType, SigningOrderSide, SizeType,
 };
 
 #[tokio::main]
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asset_id:         "100170100".into(),
         side:             SigningOrderSide::Buy,
         market_type:      "prediction".into(),
-        client_order_id:  Some(generate_client_order_id_default()?),
+        client_order_id:  generate_client_order_id_default()?,
         price:            "0.65".into(),
         reduce_only:      false,
         size:             "100".into(),
@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Sign and assemble the SignatureWrapper expected by the wire format.
     let nonce = now_millis();
-    let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+    let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
     // 5. Submit.
     let req = PlaceOrderRequest {
@@ -234,7 +234,7 @@ The snippet below assumes `client` and `key` are already constructed as in the [
 ```rust
 use okx_outcomes_sdk::models::order::{CancelItem, CancelOrderAction, CancelOrderRequest};
 use okx_outcomes_sdk::signing::{
-    action_cancel, now_millis, sign_to_wrapper, CancelRequest, CancelTarget,
+    action_cancel, now_millis, sign_to_wrapper, ChainType, CancelRequest, CancelTarget,
 };
 
 // 1. Build the typed cancel request. Pick exactly one CancelTarget variant:
@@ -254,7 +254,7 @@ let action      = action_cancel(vec![cancel_request]);
 
 // 3. Sign and submit.
 let nonce     = now_millis();
-let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
 let resp = client
     .cancel_order(&CancelOrderRequest {
@@ -280,14 +280,14 @@ Notes:
 
 ```rust
 use okx_outcomes_sdk::models::order::{CancelAllAction, CancelAllRequest};
-use okx_outcomes_sdk::signing::{action_cancel_all, now_millis, sign_to_wrapper};
+use okx_outcomes_sdk::signing::{action_cancel_all, now_millis, sign_to_wrapper, ChainType};
 
 let asset_ids: Vec<String> = vec![];          // empty = every market; or specific asset IDs
 let market_type            = "prediction";
 
 let action    = action_cancel_all(asset_ids.clone(), market_type);
 let nonce     = now_millis();
-let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
 let resp = client
     .cancel_all(&CancelAllRequest {
@@ -421,17 +421,45 @@ match client.list_orders(None, None, None, None).await {
 
 `SdkError::Api { code, message }` carries the server's business error code, so you can match on specific codes (rate limit, insufficient balance, signature mismatch, etc.) without parsing strings. OKX sends `code` as either a JSON string (`"50105"`) or a number (`100015`); the SDK accepts both and normalizes to `i64`. When a non-2xx response body isn't the standard `{ code, msg }` shape (e.g. an HTML error page from a gateway), you get `SdkError::UnexpectedStatus { status, body }` instead, which preserves the raw HTTP status.
 
-## Configuration via environment variables
+## Configuration
 
-| Variable | Scope | Effect |
+The SDK reads **no environment variables** — all configuration is passed explicitly. Construct the REST client with the builder:
+
+```rust
+use okx_outcomes_sdk::{OutcomesSdkClient, TradingMode};
+
+let client = OutcomesSdkClient::builder()
+    .credentials(creds)
+    .base_url("https://www.okx.com")     // default; must be https (loopback http ok)
+    .mode(TradingMode::Points)           // X-Predictions-Mode header (Points)
+    .accept_language("en-US")            // Accept-Language (BCP-47)
+    .timeout_secs(20)                    // per-request HTTP timeout (default 10)
+    .debug(true)                         // request/response logging — debug builds only
+    .build();
+```
+
+| Setting | Builder method | Default |
 | --- | --- | --- |
-| `OUTCOMES_API_BASE` | REST | Host for all REST calls (outcomes and market data). Default `https://www.okx.com`. An explicit `with_credentials_and_url` arg takes priority over this variable. |
-| `OUTCOMES_TIMEOUT` | REST only | Per-request HTTP timeout in seconds (default `10`). Does **not** apply to WebSocket; the WS client uses a hard-coded 25 s ping interval and 3 s -> 30 s reconnect backoff. |
-| `OUTCOMES_DEBUG=1` | REST + WS | Log every HTTP and WS request/response to stderr. **Debug builds only** — ignored in release builds so credentials are never logged in production. |
-| `OUTCOMES_MODE` | REST only | `spots` or `points`. Sent as the `X-Predictions-Mode` header. |
-| `OUTCOMES_LANG` | REST only | BCP-47 tag for `Accept-Language` (e.g. `en-US`, `zh-CN`). |
-| `OUTCOMES_WS_HOST` | WS only | Override the WebSocket host. EU and US production hosts are also available as `ws::endpoints::EU_WS_HOST` / `US_WS_HOST`. |
-| `OUTCOMES_CHAIN` | Signing only | `mainnet` (default) or `testnet`. Selects the Agent `source` string baked into EIP-712 signed bytes. The EIP-712 domain chain ID is always mainnet regardless. |
+| REST base URL | `.base_url(..)` | `https://www.okx.com` (must be https; loopback http allowed) |
+| Per-request timeout | `.timeout_secs(..)` | `10` (REST only; WS uses a fixed 25 s ping / 3 s→30 s reconnect backoff) |
+| Debug logging | `.debug(true)` | off — **honored in debug builds only**, so credentials are never logged in release |
+| Trading mode | `.mode(TradingMode::..)` | unset (no `X-Predictions-Mode` header) |
+| Accept-Language | `.accept_language(..)` | unset |
+
+`with_credentials` and `with_credentials_and_url` remain as shortcuts over the builder.
+
+**WebSocket** is configured the same way:
+
+```rust
+use okx_outcomes_sdk::ws::OutcomesWsClient;
+
+let ws = OutcomesWsClient::builder()
+    .host(okx_outcomes_sdk::ws::endpoints::EU_WS_HOST) // EU_WS_HOST / US_WS_HOST also exported
+    .debug(true)
+    .build();
+```
+
+**Signing** takes the chain explicitly: pass a `ChainType` (`Mainnet` / `Testnet`) to `sign_to_wrapper` / `sign_action*`. For client order IDs, set region/env once at startup with `register_client_order_id_context(region, env)` or pass them to `generate_client_order_id(region, env)` (defaults to HK / PROD).
 
 ## License
 

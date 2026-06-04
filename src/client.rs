@@ -11,7 +11,7 @@ use sha2::Sha256;
 const DEFAULT_BASE_URL: &str = "https://www.okx.com";
 
 /// Auth headers whose values are credentials and must never be printed, even in
-/// debug builds with `OUTCOMES_DEBUG=1`. Defense-in-depth on top of the
+/// debug builds with debug logging enabled. Defense-in-depth on top of the
 /// debug-build gate: a captured debug log (CI artifact, shared screen, pasted
 /// ticket) still cannot leak a reusable credential.
 const SENSITIVE_HEADERS: [&str; 4] = [
@@ -60,6 +60,18 @@ pub struct ApiCredentials {
     pub passphrase: String,
 }
 
+// Hand-written so credential material is never emitted by `{:?}` / `dbg!`.
+// Deliberately not `#[derive(Debug)]` — a derive would print the secrets.
+impl std::fmt::Debug for ApiCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiCredentials")
+            .field("api_key", &"<redacted>")
+            .field("secret_key", &"<redacted>")
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Client for the OKX Outcomes Developer API.
 ///
 /// # Authentication
@@ -89,77 +101,136 @@ pub struct OutcomesSdkClient {
     pub(crate) http: reqwest::Client,
     pub(crate) base_url: String,
     pub(crate) credentials: Option<ApiCredentials>,
+    /// Whether to log requests/responses to stderr. Configured via the builder
+    /// (`debug(true)`); honored only in debug builds (see request helpers).
+    pub(crate) debug: bool,
     /// Headers attached to every request via [`attach_auth`] (mode +
-    /// language). Stored once at construction so [`OUTCOMES_DEBUG=1`]
-    /// can surface them in the per-request log alongside `OK-ACCESS-*`,
-    /// rather than having them silently merged at send time by
-    /// `reqwest::ClientBuilder::default_headers`.
+    /// language). Stored once at construction so debug logging can surface them
+    /// in the per-request log alongside `OK-ACCESS-*`, rather than having them
+    /// silently merged at send time by `reqwest::ClientBuilder::default_headers`.
     pub(crate) extra_headers: reqwest::header::HeaderMap,
 }
 
-impl OutcomesSdkClient {
-    /// Create an authenticated client for user-specific and write endpoints.
-    ///
-    /// Every request will carry the four `OK-ACCESS-*` headers signed with
-    /// HMAC-SHA256 as specified in the OKX REST authentication documentation.
-    pub fn with_credentials(credentials: ApiCredentials) -> Self {
-        Self::build(None, Some(credentials))
+// Hand-written so the API-key credentials are never emitted by `{:?}` / `dbg!`.
+// The auth field shows only whether it is configured (`Some(<redacted>)` /
+// `None`), never the value. Deliberately not `#[derive(Debug)]`, which would
+// print the secrets.
+impl std::fmt::Debug for OutcomesSdkClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutcomesSdkClient")
+            .field("base_url", &self.base_url)
+            .field(
+                "credentials",
+                &self.credentials.as_ref().map(|_| "<redacted>"),
+            )
+            .field("debug", &self.debug)
+            .field("extra_headers", &self.extra_headers)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Trading mode, sent as the `X-Predictions-Mode` request header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradingMode {
+    /// Points market.
+    Points,
+}
+
+impl TradingMode {
+    fn header_value(self) -> &'static str {
+        match self {
+            TradingMode::Points => "points",
+        }
+    }
+}
+
+/// Builder for [`OutcomesSdkClient`] — construct via [`OutcomesSdkClient::builder`].
+///
+/// Every setting is explicit; the SDK reads no environment variables. Unset
+/// options fall back to compiled-in defaults: base URL `https://www.okx.com`,
+/// 10-second timeout, no mode/language header, debug logging off.
+#[derive(Default)]
+pub struct OutcomesSdkClientBuilder {
+    credentials: Option<ApiCredentials>,
+    base_url: Option<String>,
+    mode: Option<TradingMode>,
+    accept_language: Option<String>,
+    timeout_secs: Option<u64>,
+    debug: bool,
+}
+
+impl OutcomesSdkClientBuilder {
+    /// API-key credentials for HMAC-signed REST auth.
+    pub fn credentials(mut self, credentials: ApiCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
     }
 
-    /// Create an authenticated client pointing at a custom base URL.
-    pub fn with_credentials_and_url(
-        credentials: ApiCredentials,
-        base_url: impl Into<String>,
-    ) -> Self {
-        Self::build(Some(base_url.into()), Some(credentials))
+    /// Override the REST base URL. Must be `https` (plain `http` is accepted
+    /// only for a localhost loopback). Defaults to `https://www.okx.com`.
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
     }
 
-    fn build(base_url: Option<String>, credentials: Option<ApiCredentials>) -> Self {
-        // Resolution order for the outcomes base URL:
-        //   1. explicit arg from `with_credentials_and_url`
-        //   2. `OUTCOMES_API_BASE` env var
-        //   3. compiled-in `DEFAULT_BASE_URL`
-        let base_url = base_url
-            .or_else(|| std::env::var("OUTCOMES_API_BASE").ok())
+    /// Trading mode, sent as the `X-Predictions-Mode` header. Omitted if unset.
+    pub fn mode(mut self, mode: TradingMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// `Accept-Language` header (BCP-47 tag, e.g. `"en-US"`, `"zh-CN"`).
+    pub fn accept_language(mut self, lang: impl Into<String>) -> Self {
+        self.accept_language = Some(lang.into());
+        self
+    }
+
+    /// Per-request HTTP timeout in seconds. Defaults to `10`.
+    pub fn timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Enable request/response debug logging to stderr. Honored only in debug
+    /// builds — release builds never log, so credentials cannot leak in
+    /// production regardless of this flag.
+    pub fn debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Build the configured [`OutcomesSdkClient`].
+    pub fn build(self) -> OutcomesSdkClient {
+        let base_url = self
+            .base_url
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
         // The `OK-ACCESS-*` signing headers are attached to every request to
-        // `base_url`, so an attacker who can set `OUTCOMES_API_BASE` could
-        // exfiltrate a valid passphrase + signature to an arbitrary host.
-        // Refuse any non-`https` base URL (plain `http` is allowed only for an
-        // explicit localhost loopback, which is used by tests/local mocks) and
-        // fall back to the safe compiled-in default instead.
+        // `base_url`, so a non-`https` base URL could exfiltrate a valid
+        // passphrase + signature to an arbitrary host. Refuse anything that is
+        // not `https` (plain `http` allowed only for an explicit localhost
+        // loopback, used by tests/local mocks) and fall back to the safe
+        // compiled-in default instead.
         let base_url = if is_acceptable_base_url(&base_url) {
             base_url
         } else {
             eprintln!(
-                "Warning: refusing insecure OUTCOMES base URL {base_url:?} (must be https); \
+                "Warning: refusing insecure base URL {base_url:?} (must be https); \
                  falling back to {DEFAULT_BASE_URL}"
             );
             DEFAULT_BASE_URL.to_string()
         };
 
         let mut extra_headers = reqwest::header::HeaderMap::new();
-        // Trading mode header from env var (CLI usage).
-        // Mobile path uses OutcomesApiClient which reads the global config instead.
-        if let Ok(mode) = std::env::var("OUTCOMES_MODE") {
-            match mode.as_str() {
-                "spots" | "points" => {
-                    if let Ok(val) = reqwest::header::HeaderValue::from_str(&mode) {
-                        extra_headers.insert("X-Predictions-Mode", val);
-                    }
-                }
-                other => {
-                    eprintln!("Warning: OUTCOMES_MODE must be \"spots\" or \"points\", got \"{other}\", header omitted");
-                }
+        if let Some(mode) = self.mode {
+            // header_value() is always a valid header string.
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(mode.header_value()) {
+                extra_headers.insert("X-Predictions-Mode", val);
             }
         }
-
-        // Accept-Language header for response localization. Standard HTTP
-        // semantics: BCP 47 tag (e.g. "en-US", "zh-CN"). Backends translate
-        // event titles / market questions when the value is recognized; an
-        // unknown value is harmless (the server falls back to its default).
-        if let Ok(lang) = std::env::var("OUTCOMES_LANG") {
+        // Accept-Language for response localization; an unknown tag is harmless
+        // (the server falls back to its default).
+        if let Some(lang) = self.accept_language.as_deref() {
             let trimmed = lang.trim();
             if !trimmed.is_empty() {
                 if let Ok(val) = reqwest::header::HeaderValue::from_str(trimmed) {
@@ -168,27 +239,56 @@ impl OutcomesSdkClient {
             }
         }
 
-        let timeout_secs = std::env::var("OUTCOMES_TIMEOUT")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(10);
+        let timeout_secs = self.timeout_secs.unwrap_or(10);
 
         // Authenticated OKX endpoints never legitimately return a 3xx redirect.
         // Disable redirect following so the `OK-ACCESS-*` headers can never be
         // replayed to a redirect target (reqwest does not strip custom headers
-        // across hosts). TLS certificate verification is always on - there is
-        // no debug escape hatch; local-proxy debugging must trust the proxy CA
-        // at the OS level.
-        let builder = reqwest::Client::builder()
+        // across hosts). TLS certificate verification is always on.
+        let http_builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .redirect(reqwest::redirect::Policy::none());
 
-        Self {
-            http: builder.build().unwrap_or_else(|_| reqwest::Client::new()),
+        OutcomesSdkClient {
+            http: http_builder
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             base_url,
-            credentials,
+            credentials: self.credentials,
+            debug: self.debug,
             extra_headers,
         }
+    }
+}
+
+impl OutcomesSdkClient {
+    /// Start building a client with explicit configuration.
+    ///
+    /// All optional settings — base URL, trading mode, language, timeout, debug
+    /// logging — are set on the returned [`OutcomesSdkClientBuilder`]. The SDK
+    /// reads **no** environment variables; anything you don't set uses a
+    /// compiled-in default.
+    pub fn builder() -> OutcomesSdkClientBuilder {
+        OutcomesSdkClientBuilder::default()
+    }
+
+    /// Create an authenticated client for user-specific and write endpoints.
+    ///
+    /// Shortcut for `OutcomesSdkClient::builder().credentials(c).build()`. Every
+    /// request carries the four `OK-ACCESS-*` HMAC headers.
+    pub fn with_credentials(credentials: ApiCredentials) -> Self {
+        Self::builder().credentials(credentials).build()
+    }
+
+    /// Create an authenticated client pointing at a custom base URL.
+    pub fn with_credentials_and_url(
+        credentials: ApiCredentials,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self::builder()
+            .credentials(credentials)
+            .base_url(base_url)
+            .build()
     }
 
     // -- Signing ----------------------------------------
@@ -276,9 +376,9 @@ impl OutcomesSdkClient {
 
         // Debug logging (which prints OK-ACCESS-* auth headers) is only honored
         // in debug builds; `debug_assertions` is off in release, so a released
-        // binary never emits credentials even if OUTCOMES_DEBUG=1 is set.
-        let debug =
-            cfg!(debug_assertions) && std::env::var("OUTCOMES_DEBUG").is_ok_and(|v| v == "1");
+        // binary never emits credentials even when the client is built with
+        // `.debug(true)`.
+        let debug = cfg!(debug_assertions) && self.debug;
 
         let request = builder.build()?;
 
@@ -322,9 +422,9 @@ impl OutcomesSdkClient {
 
         // Debug logging (which prints OK-ACCESS-* auth headers) is only honored
         // in debug builds; `debug_assertions` is off in release, so a released
-        // binary never emits credentials even if OUTCOMES_DEBUG=1 is set.
-        let debug =
-            cfg!(debug_assertions) && std::env::var("OUTCOMES_DEBUG").is_ok_and(|v| v == "1");
+        // binary never emits credentials even when the client is built with
+        // `.debug(true)`.
+        let debug = cfg!(debug_assertions) && self.debug;
 
         let builder = self.http.post(&url);
         let builder = self.attach_auth(builder, "POST", path, &body_str)?;
@@ -445,6 +545,53 @@ mod tests {
         match res {
             Err(SdkError::Api { code, message }) => (code, message),
             other => panic!("expected SdkError::Api, got {other:?}"),
+        }
+    }
+
+    fn sample_credentials() -> ApiCredentials {
+        ApiCredentials {
+            api_key: "ak".into(),
+            secret_key: "sk".into(),
+            passphrase: "pp".into(),
+        }
+    }
+
+    #[test]
+    fn builder_mode_sets_prediction_mode_header() {
+        // Exercises the public builder path; TradingMode must be nameable.
+        let client = OutcomesSdkClient::builder()
+            .credentials(sample_credentials())
+            .mode(TradingMode::Points)
+            .build();
+        assert_eq!(
+            client
+                .extra_headers
+                .get("X-Predictions-Mode")
+                .and_then(|v| v.to_str().ok()),
+            Some("points"),
+        );
+
+        // Omitted when .mode() is not called.
+        let client = OutcomesSdkClient::builder()
+            .credentials(sample_credentials())
+            .build();
+        assert!(client.extra_headers.get("X-Predictions-Mode").is_none());
+    }
+
+    #[test]
+    fn debug_does_not_leak_api_credentials() {
+        let client = OutcomesSdkClient::with_credentials(ApiCredentials {
+            api_key: "ak-1234".into(),
+            secret_key: "sk-super-secret".into(),
+            passphrase: "pp-super-secret".into(),
+        });
+        // Both the client Debug and the ApiCredentials Debug must redact.
+        let rendered = format!("{client:?} {:?}", client.credentials);
+        for secret in ["ak-1234", "sk-super-secret", "pp-super-secret"] {
+            assert!(
+                !rendered.contains(secret),
+                "Debug leaked {secret}: {rendered}"
+            );
         }
     }
 
