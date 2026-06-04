@@ -164,7 +164,7 @@ use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};
 use okx_outcomes_sdk::models::order::{OrderItem, PlaceOrderAction, PlaceOrderRequest};
 use okx_outcomes_sdk::signing::{
     action_place_order, generate_client_order_id_default, now_millis, parse_private_key, sign_to_wrapper,
-    LimitOrderType, LimitTif, OrderRequest, OrderType, SigningOrderSide, SizeType,
+    ChainType, LimitOrderType, LimitTif, OrderRequest, OrderType, SigningOrderSide, SizeType,
 };
 
 #[tokio::main]
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asset_id:         "100170100".into(),
         side:             SigningOrderSide::Buy,
         market_type:      "prediction".into(),
-        client_order_id:  Some(generate_client_order_id_default()?),
+        client_order_id:  generate_client_order_id_default()?,
         price:            "0.65".into(),
         reduce_only:      false,
         size:             "100".into(),
@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. 签名并组装 wire 格式要求的 SignatureWrapper。
     let nonce = now_millis();
-    let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+    let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
     // 5. 提交。
     let req = PlaceOrderRequest {
@@ -234,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use okx_outcomes_sdk::models::order::{CancelItem, CancelOrderAction, CancelOrderRequest};
 use okx_outcomes_sdk::signing::{
-    action_cancel, now_millis, sign_to_wrapper, CancelRequest, CancelTarget,
+    action_cancel, now_millis, sign_to_wrapper, ChainType, CancelRequest, CancelTarget,
 };
 
 // 1. 构造类型化的撤单请求。CancelTarget 必须选其一：
@@ -253,7 +253,7 @@ let action      = action_cancel(vec![cancel_request]);
 
 // 3. 签名并提交。
 let nonce     = now_millis();
-let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
 let resp = client
     .cancel_order(&CancelOrderRequest {
@@ -279,14 +279,14 @@ println!("cancel tx_hash: {}", resp.tx_hash);
 
 ```rust
 use okx_outcomes_sdk::models::order::{CancelAllAction, CancelAllRequest};
-use okx_outcomes_sdk::signing::{action_cancel_all, now_millis, sign_to_wrapper};
+use okx_outcomes_sdk::signing::{action_cancel_all, now_millis, sign_to_wrapper, ChainType};
 
 let asset_ids: Vec<String> = vec![];          // 空数组 = 所有市场；也可指定具体 asset ID
 let market_type            = "prediction";
 
 let action    = action_cancel_all(asset_ids.clone(), market_type);
 let nonce     = now_millis();
-let signature = sign_to_wrapper(&action, nonce, None, &key)?;
+let signature = sign_to_wrapper(&action, nonce, None, ChainType::Mainnet, &key)?;
 
 let resp = client
     .cancel_all(&CancelAllRequest {
@@ -420,17 +420,45 @@ match client.list_orders(None, None, None, None).await {
 
 `SdkError::Api { code, message }` 携带服务端返回的业务错误码，因此可以对具体错误码（限流、余额不足、签名不匹配等）进行匹配，而不需要解析字符串。OKX 在传输层会将 `code` 发送为 JSON 字符串（`"50105"`）或数字（`100015`），SDK 两者都接受并统一归一化为 `i64`。当非 2xx 响应体不符合标准的 `{ code, msg }` 结构时（例如网关返回的 HTML 错误页），则会得到 `SdkError::UnexpectedStatus { status, body }`，其中保留了原始 HTTP 状态码。
 
-## 通过环境变量配置
+## 配置
 
-| 变量 | 作用范围 | 作用 |
+SDK **不读取任何环境变量** —— 所有配置都显式传入。使用 builder 构造 REST 客户端：
+
+```rust
+use okx_outcomes_sdk::{OutcomesSdkClient, TradingMode};
+
+let client = OutcomesSdkClient::builder()
+    .credentials(creds)
+    .base_url("https://www.okx.com")     // 默认；必须为 https（loopback http 可）
+    .mode(TradingMode::Points)           // X-Predictions-Mode 请求头（Points）
+    .accept_language("en-US")            // Accept-Language（BCP-47）
+    .timeout_secs(20)                    // 每次请求的 HTTP 超时（默认 10）
+    .debug(true)                         // 请求/响应日志 —— 仅 debug 构建生效
+    .build();
+```
+
+| 配置项 | builder 方法 | 默认值 |
 | --- | --- | --- |
-| `OUTCOMES_API_BASE` | REST | 所有 REST 调用（Outcomes 与市场数据）的主机。默认 `https://www.okx.com`。显式的 `with_credentials_and_url` 参数优先级高于该变量。 |
-| `OUTCOMES_TIMEOUT` | 仅 REST | 每次请求的 HTTP 超时秒数（默认 `10`）。**不**适用于 WebSocket；WS 客户端固定使用 25 s 心跳间隔与 3 s -> 30 s 重连退避。 |
-| `OUTCOMES_DEBUG=1` | REST + WS | 将每个 HTTP 与 WS 请求/响应写入 stderr。**仅 debug 构建生效** —— release 构建中会被忽略，因此生产环境绝不会记录凭据。 |
-| `OUTCOMES_MODE` | 仅 REST | `spots` 或 `points`，作为 `X-Predictions-Mode` 请求头发送。 |
-| `OUTCOMES_LANG` | 仅 REST | 用于 `Accept-Language` 的 BCP-47 标签（例如 `en-US`、`zh-CN`）。 |
-| `OUTCOMES_WS_HOST` | 仅 WS | 覆盖 WebSocket 主机。EU 与 US 生产环境主机也可以通过 `ws::endpoints::EU_WS_HOST` / `US_WS_HOST` 取得。 |
-| `OUTCOMES_CHAIN` | 仅签名 | `mainnet`（默认）或 `testnet`。选择 EIP-712 签名字节中写入的 Agent source 字符串。EIP-712 的 domain chain ID 始终保持为 mainnet。 |
+| REST base URL | `.base_url(..)` | `https://www.okx.com`（必须 https；允许 loopback http） |
+| 每次请求超时 | `.timeout_secs(..)` | `10`（仅 REST；WS 固定 25 s 心跳 / 3 s→30 s 重连退避） |
+| 调试日志 | `.debug(true)` | 关闭 —— **仅 debug 构建生效**，因此 release 绝不记录凭据 |
+| 交易模式 | `.mode(TradingMode::..)` | 未设置（不发送 `X-Predictions-Mode`） |
+| Accept-Language | `.accept_language(..)` | 未设置 |
+
+`with_credentials`、`with_credentials_and_url` 仍作为 builder 的快捷方式保留。
+
+**WebSocket** 同样通过 builder 配置：
+
+```rust
+use okx_outcomes_sdk::ws::OutcomesWsClient;
+
+let ws = OutcomesWsClient::builder()
+    .host(okx_outcomes_sdk::ws::endpoints::EU_WS_HOST) // 也导出 EU_WS_HOST / US_WS_HOST
+    .debug(true)
+    .build();
+```
+
+**签名**需显式传入链：把 `ChainType`（`Mainnet` / `Testnet`）传给 `sign_to_wrapper` / `sign_action*`。客户端订单 ID 的 region/env 可在启动时用 `register_client_order_id_context(region, env)` 注册一次，或传给 `generate_client_order_id(region, env)`（默认 HK / PROD）。
 
 ## 许可证
 

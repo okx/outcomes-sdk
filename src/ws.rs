@@ -9,4 +9,4 @@ pub mod transport;
 pub mod tungstenite;
 
 pub use transport::{WsConnectionStateCallback, WsDataCallback, WsTransport};
-pub use tungstenite::OutcomesWsClient;
+pub use tungstenite::{OutcomesWsClient, OutcomesWsClientBuilder};

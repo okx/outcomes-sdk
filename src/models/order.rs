@@ -235,7 +235,7 @@ pub struct OrderTypeSpec {
 /// Field order matches the OKX place-order wire shape so the hand-written
 /// msgpack encoder and serde JSON serializer produce the same canonical
 /// wire order:
-///   `assetId, side, marketType, clientOrderId?, price, reduceOnly, size, sizeType?, orderType`
+///   `assetId, side, marketType, clientOrderId, price, reduceOnly, size, sizeType?, orderType`
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderItem {
@@ -245,10 +245,10 @@ pub struct OrderItem {
     /// Always `"prediction"`.
     pub market_type: String,
     /// Spec-compliant 34-char client order ID (`0x{region}{env}{30-hex random}`).
-    /// With the `signing` feature enabled, generate via
+    /// Required by the OKX REST place-order spec. With the `signing` feature
+    /// enabled, generate via
     /// `okx_outcomes_sdk::signing::generate_client_order_id_default`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_order_id: Option<String>,
+    pub client_order_id: String,
     /// Limit price as decimal string, e.g. `"0.65"`.
     pub price: String,
     /// Reduce-only flag (default `false`).
@@ -483,7 +483,7 @@ mod try_from_order_request_tests {
             asset_id: "63000".to_string(),
             side: SigningOrderSide::Buy,
             market_type: "prediction".to_string(),
-            client_order_id: Some("0x0197a98c91312671ca83f15ccbd5186f".to_string()),
+            client_order_id: "0x0197a98c91312671ca83f15ccbd5186f".to_string(),
             price: "0.5".to_string(),
             reduce_only: false,
             size: "1.0".to_string(),

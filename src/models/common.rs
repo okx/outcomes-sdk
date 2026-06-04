@@ -42,11 +42,12 @@ impl std::fmt::Display for OrderSide {
     }
 }
 
-/// `spots` (real-money) / `points` (points market) — odds type.
+/// `points` (points market) — odds type. `Unknown` is the catch-all for any
+/// other value the server might send, so deserialization degrades gracefully
+/// instead of failing the whole payload.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OddsType {
-    Spots,
     Points,
     #[default]
     #[serde(other)]
@@ -56,7 +57,6 @@ pub enum OddsType {
 impl OddsType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Spots => "spots",
             Self::Points => "points",
             Self::Unknown => "unknown",
         }

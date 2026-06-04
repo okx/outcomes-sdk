@@ -20,7 +20,7 @@ use serde::Serialize;
 pub use crate::models::order::{LimitOrderType, LimitTif, SigningOrderSide, SizeType};
 
 /// A single place-order request. Field declaration order matches the OKX
-/// wire format (`assetId, side, marketType, clientOrderId?, price,
+/// wire format (`assetId, side, marketType, clientOrderId, price,
 /// reduceOnly, size, sizeType?, orderType`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,9 +30,10 @@ pub struct OrderRequest {
     pub side: SigningOrderSide,
     /// Always `"prediction"` for the outcomes market.
     pub market_type: String,
-    /// 34-char client order ID; emitted as `clientOrderId` in msgpack when set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_order_id: Option<String>,
+    /// 34-char client order ID, emitted as `clientOrderId`. Required by the
+    /// OKX REST place-order spec; generate via
+    /// [`generate_client_order_id_default`](crate::signing::generate_client_order_id_default).
+    pub client_order_id: String,
     /// Limit price as a decimal string.
     pub price: String,
     pub reduce_only: bool,

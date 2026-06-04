@@ -13,7 +13,7 @@ Conventions used throughout:
 
 ### Client construction
 
-Module: `okx_outcomes_sdk::{OutcomesSdkClient, ApiCredentials}`.
+Module: `okx_outcomes_sdk::{OutcomesSdkClient, OutcomesSdkClientBuilder, TradingMode, ApiCredentials}`.
 
 ```rust
 pub struct ApiCredentials {
@@ -22,13 +22,26 @@ pub struct ApiCredentials {
     pub passphrase: String, // OK-ACCESS-PASSPHRASE header value
 }
 
+pub enum TradingMode { Points } // X-Predictions-Mode header
+
 impl OutcomesSdkClient {
-    pub fn with_credentials(creds: ApiCredentials) -> Self;
+    pub fn builder() -> OutcomesSdkClientBuilder;
+    pub fn with_credentials(creds: ApiCredentials) -> Self;            // shortcut
     pub fn with_credentials_and_url(creds: ApiCredentials, base_url: impl Into<String>) -> Self;
+}
+
+impl OutcomesSdkClientBuilder {
+    pub fn credentials(self, creds: ApiCredentials) -> Self;
+    pub fn base_url(self, base_url: impl Into<String>) -> Self;       // default https://www.okx.com
+    pub fn mode(self, mode: TradingMode) -> Self;                     // omitted if unset
+    pub fn accept_language(self, lang: impl Into<String>) -> Self;    // Accept-Language (BCP-47)
+    pub fn timeout_secs(self, secs: u64) -> Self;                     // default 10
+    pub fn debug(self, debug: bool) -> Self;                          // debug builds only
+    pub fn build(self) -> OutcomesSdkClient;
 }
 ```
 
-Base URL resolution order: explicit arg to `with_credentials_and_url` > `OUTCOMES_API_BASE` env var > `https://www.okx.com`. Endpoint constants are full absolute paths (`/api/v5/predictions/...`, `/api/v5/market/...`) that are concatenated with the base URL, so a single host setting covers both the outcomes and market-data calls.
+All configuration is explicit — the SDK reads no environment variables. Base URL resolution: the explicit `.base_url(..)` builder value (or `with_credentials_and_url` arg), else the compiled-in default `https://www.okx.com`. Endpoint constants are full absolute paths (`/api/v5/predictions/...`, `/api/v5/market/...`) that are concatenated with the base URL, so a single host setting covers both the outcomes and market-data calls.
 
 ### Errors
 
@@ -240,7 +253,7 @@ pub async fn get_balance(&self) -> Result<BalanceResponse, SdkError>;
 pub type BalanceResponse = Vec<BalanceEntry>;
 
 pub struct BalanceEntry {
-    odds_type: OddsType, // Spots / Points / Unknown
+    odds_type: OddsType, // Points / Unknown
     balance:   String,   // total balance (units determined by odds_type)
     available: String,   // available balance (balance - frozen by open orders)
 }
@@ -276,7 +289,7 @@ struct OrderItem {
     asset_id:        String,           // outcome assetId
     side:            SigningOrderSide, // Buy / Sell (placement-side lowercase wire — bytes feed the EIP-712 hash)
     market_type:     String,           // always "prediction"
-    client_order_id: Option<String>,   // 34-char client order ID; see Signing > Client Order ID
+    client_order_id: String,           // required; 34-char client order ID; see Signing > Client Order ID
     price:           String,           // decimal in [0, 1]
     reduce_only:     bool,
     size:            String,           // decimal
@@ -402,7 +415,7 @@ pub struct OrderRecord {
     filled_amount:   String,           // decimal
     fail_reason:     Option<String>,   // present only when status == RestOrderStatus::Failed
     cancel_reason:   Option<String>,   // set when the server cancelled (heartbeat lapse, market resolved, ...)
-    odds_type:       OddsType,         // Spots / Points / Unknown
+    odds_type:       OddsType,         // Points / Unknown
     created_at:      String,           // Unix ms (as string)
     updated_at:      String,           // Unix ms (as string)
 }
@@ -471,8 +484,8 @@ pub struct PositionRecord {
     cur_price:                  String,         // current token price
     realized_pnl:               String,         // realized P&L
     realized_pnl_percentage:    String,
-    odds_type:                  OddsType,       // Spots / Points / Unknown
-                                                 // (verified live: wire value is "points" or "spots", not "real")
+    odds_type:                  OddsType,       // Points / Unknown
+                                                 // (verified live: wire value is "points")
 }
 ```
 
@@ -695,7 +708,7 @@ pub mod ws::endpoints {
 }
 ```
 
-`OutcomesWsClient` defaults to `DEFAULT_WS_HOST`; override with `OutcomesWsClient::with_host(...)` or the `OUTCOMES_WS_HOST` env var.
+`OutcomesWsClient` defaults to `DEFAULT_WS_HOST`; override with `OutcomesWsClient::builder().host(...).build()` (or the `with_host(...)` shortcut). Debug logging is set via `.debug(true)`. The SDK reads no environment variables.
 
 Lifecycle and resilience:
 
@@ -1089,6 +1102,7 @@ pub fn sign_to_wrapper(
     action:        &Action,
     nonce:         u64,
     expires_after: Option<u64>,
+    chain:         ChainType,   // Mainnet / Testnet — Agent `source`; passed explicitly
     key:           &SigningKey,
 ) -> Result<SignatureWrapper, String>;
 ```
@@ -1148,7 +1162,7 @@ pub fn parse_client_order_id_prefix(client_order_id: Option<&str>) -> ClientOrde
 pub fn register_client_order_id_context(region: Region, env: Env);
 ```
 
-Client order IDs are 34-character hex strings of the shape `0x{region}{env}{30-hex random}`. `generate_client_order_id_default()` reads the registered global context (defaulting to HK / PROD). Register a different context once at startup to override.
+Client order IDs are 34-character hex strings of the shape `0x{region}{env}{30-hex random}`. `generate_client_order_id_default()` uses the registered global context, or the compiled-in HK / PROD default (the SDK reads no environment variables). Call `register_client_order_id_context(region, env)` once at startup to override, or pass values explicitly to `generate_client_order_id(region, env)`.
 
 Low-level helpers:
 

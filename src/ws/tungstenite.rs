@@ -26,11 +26,12 @@ const PING_INTERVAL_SECS: u64 = 25;
 const RECONNECT_BASE_MS: u64 = 3000;
 const RECONNECT_MAX_MS: u64 = 30000;
 
-fn ws_debug_enabled() -> bool {
+fn ws_debug_enabled(configured: bool) -> bool {
     // Debug logging is only available in debug builds. In release builds this
     // is always false, so credential-bearing frames (the WS `login` op carries
-    // apiKey/passphrase/sign) can never be printed regardless of the env var.
-    cfg!(debug_assertions) && std::env::var("OUTCOMES_DEBUG").is_ok_and(|v| v == "1")
+    // apiKey/passphrase/sign) can never be printed regardless of the configured
+    // flag. `configured` comes from the builder's `debug(true)`.
+    cfg!(debug_assertions) && configured
 }
 
 /// Print a debug line with explicit `\r\n` so it renders correctly
@@ -65,6 +66,8 @@ struct Subscription {
 /// Shared reconnection state.
 struct SharedState {
     host: String,
+    /// Whether to emit `[WS DEBUG]` lines (gated to debug builds at use sites).
+    debug: bool,
     path: Mutex<String>,
     sender: WsSender,
     on_data: Arc<std::sync::Mutex<Option<WsDataCallback>>>,
@@ -83,28 +86,42 @@ struct SharedState {
 
 /// WebSocket client using `tokio-tungstenite`.
 ///
-/// Configurable host via [`OutcomesWsClient::with_host`] or the `OUTCOMES_WS_HOST` env var.
+/// Configure the host and debug logging via [`OutcomesWsClient::builder`]
+/// (or the [`with_host`](OutcomesWsClient::with_host) shortcut). The SDK reads
+/// no environment variables.
 pub struct OutcomesWsClient {
     shared: Arc<SharedState>,
 }
 
-impl Default for OutcomesWsClient {
-    fn default() -> Self {
-        let host =
-            std::env::var("OUTCOMES_WS_HOST").unwrap_or_else(|_| DEFAULT_WS_HOST.to_string());
-        Self::with_host(&host)
-    }
+/// Builder for [`OutcomesWsClient`]. Construct via [`OutcomesWsClient::builder`].
+///
+/// Unset options use compiled-in defaults: host `DEFAULT_WS_HOST`, debug off.
+#[derive(Default)]
+pub struct OutcomesWsClientBuilder {
+    host: Option<String>,
+    debug: bool,
 }
 
-impl OutcomesWsClient {
-    pub fn new() -> Self {
-        Self::default()
+impl OutcomesWsClientBuilder {
+    /// Override the WebSocket host. Defaults to `DEFAULT_WS_HOST`.
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
     }
 
-    pub fn with_host(host: &str) -> Self {
-        Self {
+    /// Enable `[WS DEBUG]` logging to stderr. Honored only in debug builds, so
+    /// the credential-bearing `login` frame can never be logged in production.
+    pub fn debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Build the configured [`OutcomesWsClient`].
+    pub fn build(self) -> OutcomesWsClient {
+        OutcomesWsClient {
             shared: Arc::new(SharedState {
-                host: host.to_string(),
+                host: self.host.unwrap_or_else(|| DEFAULT_WS_HOST.to_string()),
+                debug: self.debug,
                 path: Mutex::new(String::new()),
                 sender: Arc::new(Mutex::new(None)),
                 on_data: Arc::new(std::sync::Mutex::new(None)),
@@ -117,6 +134,30 @@ impl OutcomesWsClient {
                 auto_reconnect: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             }),
         }
+    }
+}
+
+impl Default for OutcomesWsClient {
+    fn default() -> Self {
+        OutcomesWsClientBuilder::default().build()
+    }
+}
+
+impl OutcomesWsClient {
+    /// Start building a client with explicit host/debug configuration.
+    pub fn builder() -> OutcomesWsClientBuilder {
+        OutcomesWsClientBuilder::default()
+    }
+
+    /// Default client: `DEFAULT_WS_HOST`, debug off.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Client pointing at a custom host (debug off). Shortcut for
+    /// `OutcomesWsClient::builder().host(host).build()`.
+    pub fn with_host(host: &str) -> Self {
+        Self::builder().host(host).build()
     }
 }
 
@@ -139,7 +180,7 @@ async fn store_sender(
 /// Connect, spawn reader + ping. Returns handles.
 fn do_connect(ss: Arc<SharedState>) -> BoxFutureSend<ConnectResult> {
     Box::pin(async move {
-        let debug = ws_debug_enabled();
+        let debug = ws_debug_enabled(ss.debug);
         let path = { ss.path.lock().await.clone() };
         let url = format!("{}{}", ss.host, path);
         if debug {
@@ -278,7 +319,7 @@ fn do_connect(ss: Arc<SharedState>) -> BoxFutureSend<ConnectResult> {
 
 /// Reconnect loop with exponential backoff + subscription replay.
 async fn reconnect_loop(ss: Arc<SharedState>) {
-    let debug = ws_debug_enabled();
+    let debug = ws_debug_enabled(ss.debug);
     let mut delay_ms = RECONNECT_BASE_MS;
 
     loop {
@@ -505,7 +546,7 @@ impl OutcomesWsClient {
     }
 
     pub async fn disconnect(&self) {
-        if ws_debug_enabled() {
+        if ws_debug_enabled(self.shared.debug) {
             ws_debug!("Disconnecting");
         }
         self.shared
@@ -526,7 +567,7 @@ impl OutcomesWsClient {
         let text = serde_json::to_string(msg).map_err(|e| SdkError::Serialization {
             message: e.to_string(),
         })?;
-        if ws_debug_enabled() {
+        if ws_debug_enabled(self.shared.debug) {
             // The `login` frame carries apiKey/passphrase/sign in plaintext;
             // never print its body, even in a debug build. Redact to a fixed
             // placeholder as defense-in-depth on top of the debug-build gate.

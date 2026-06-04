@@ -25,6 +25,7 @@ pub use action::{
     action_cancel, action_cancel_all, action_place_order, action_prediction_merge,
     action_prediction_redeem, action_prediction_split, Action, Grouping,
 };
+pub use chain_type::ChainType;
 pub use client_order_id::{
     generate_client_order_id, generate_client_order_id_default, parse_client_order_id_prefix,
     parse_env_str, parse_region_str, register_client_order_id_context, validate_client_order_id,
@@ -50,10 +51,10 @@ pub fn sign_to_wrapper(
     action: &Action,
     nonce: u64,
     expires_after: Option<u64>,
+    chain: ChainType,
     key: &k256::ecdsa::SigningKey,
 ) -> Result<SignatureWrapper, String> {
-    let source_chain = eip712::chain_env();
-    let tx_sig = signer::sign_action(action, key, nonce, expires_after, None, source_chain)?;
+    let tx_sig = signer::sign_action(action, key, nonce, expires_after, None, chain)?;
     Ok(tx_sig.into())
 }
 
@@ -91,7 +92,7 @@ mod tests {
             asset_id: asset_id.to_string(),
             side: side.parse().expect("test helper got invalid side"),
             market_type: "prediction".to_string(),
-            client_order_id: None,
+            client_order_id: "0x0197a98c91312671ca83f15ccbd5186f".to_string(),
             price: price.to_string(),
             reduce_only: false,
             size: size.to_string(),
@@ -125,7 +126,7 @@ mod tests {
     fn sign_split_produces_valid_signature() {
         let action = action_prediction_split("123", "100.5");
         let nonce = 1711094400000u64;
-        let sig = sign_action(&action, nonce, None, None, &test_key());
+        let sig = sign_action(&action, nonce, None, None, ChainType::Mainnet, &test_key());
         assert!(sig.is_ok());
         let sig = sig.unwrap_or_default();
         assert!(sig.starts_with("0x"));
@@ -136,8 +137,8 @@ mod tests {
     fn sign_split_is_deterministic() {
         let action = action_prediction_split("1", "10");
         let nonce = 1000u64;
-        let sig1 = sign_action(&action, nonce, None, None, &test_key());
-        let sig2 = sign_action(&action, nonce, None, None, &test_key());
+        let sig1 = sign_action(&action, nonce, None, None, ChainType::Mainnet, &test_key());
+        let sig2 = sign_action(&action, nonce, None, None, ChainType::Mainnet, &test_key());
         assert_eq!(sig1, sig2);
     }
 
@@ -146,7 +147,7 @@ mod tests {
         let action = action_prediction_split("1", "10");
         let nonce = 1000u64;
         let key = test_key();
-        let dbg = sign_action_debug(&action, nonce, None, None, &key);
+        let dbg = sign_action_debug(&action, nonce, None, None, ChainType::Mainnet, &key);
         assert!(dbg.is_ok());
         let dbg = dbg.unwrap_or_else(|_| unreachable!());
 
@@ -164,8 +165,8 @@ mod tests {
         let merge = action_prediction_merge("1", "10");
         let nonce = 1000u64;
         let key = test_key();
-        let sig_split = sign_action(&split, nonce, None, None, &key);
-        let sig_merge = sign_action(&merge, nonce, None, None, &key);
+        let sig_split = sign_action(&split, nonce, None, None, ChainType::Mainnet, &key);
+        let sig_merge = sign_action(&merge, nonce, None, None, ChainType::Mainnet, &key);
         assert_ne!(sig_split, sig_merge);
     }
 
@@ -297,8 +298,10 @@ mod tests {
         let action1 = action_place_order(vec![order.clone()]);
         let action2 = action_place_order(vec![order]);
 
-        let r1 = sign_action_full(&action1, nonce, None, None, &key).expect("sign1");
-        let r2 = sign_action_full(&action2, nonce, None, None, &key).expect("sign2");
+        let r1 =
+            sign_action_full(&action1, nonce, None, None, ChainType::Mainnet, &key).expect("sign1");
+        let r2 =
+            sign_action_full(&action2, nonce, None, None, ChainType::Mainnet, &key).expect("sign2");
         assert_eq!(r1, r2, "signing must be deterministic");
     }
 
@@ -429,7 +432,7 @@ mod tests {
     #[test]
     fn place_order_with_client_order_id() {
         let order = OrderRequest {
-            client_order_id: Some("my-custom-id-123".to_string()),
+            client_order_id: "my-custom-id-123".to_string(),
             ..make_limit_order("1", "buy", "0.5", "10", "gtc")
         };
         let action = action_place_order(vec![order]);
@@ -567,7 +570,8 @@ mod tests {
         let key = test_key();
         let expected_addr = signer_address(&key);
         let action = action_prediction_split("1", "10");
-        let dbg = sign_action_debug(&action, 1000, None, None, &key).expect("sign");
+        let dbg =
+            sign_action_debug(&action, 1000, None, None, ChainType::Mainnet, &key).expect("sign");
 
         let recovered = ecrecover(&dbg.signing_hash, &dbg.signature).expect("ecrecover");
         assert_eq!(recovered.to_lowercase(), expected_addr.to_lowercase());
@@ -607,7 +611,7 @@ mod tests {
             asset_id: "63000".to_string(),
             side: crate::models::order::SigningOrderSide::Buy,
             market_type: "prediction".to_string(),
-            client_order_id: Some("0x00deadbeefcafe1234567890abcdef0123".to_string()),
+            client_order_id: "0x00deadbeefcafe1234567890abcdef0123".to_string(),
             price: "0.5".to_string(),
             reduce_only: false,
             size: "1.0".to_string(),
@@ -675,73 +679,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn order_item_omits_client_order_id_when_none() {
-        use crate::models::order::{OrderItem, OrderTypeSpec};
-
-        let item = OrderItem {
-            asset_id: "1".to_string(),
-            side: crate::models::order::SigningOrderSide::Sell,
-            market_type: "prediction".to_string(),
-            client_order_id: None,
-            price: "0.5".to_string(),
-            reduce_only: false,
-            size: "1".to_string(),
-            size_type: SizeType::Base,
-            order_type: OrderTypeSpec {
-                limit: LimitOrderType { tif: LimitTif::Gtc },
-            },
-        };
-        let order_json = serde_json::to_value(&item).unwrap_or_else(|_| unreachable!());
-        assert!(
-            order_json.get("clientOrderId").is_none(),
-            "None client_order_id must be omitted entirely",
-        );
-    }
-
     // -- Specific request signature check ----------------------------
-
-    /// Verify the signing pipeline against a known request payload + signature.
-    ///
-    /// We don't have the private key, so this isn't a sign-and-compare round-trip.
-    /// Instead, we feed the request fields through the same EIP-712 pipeline and
-    /// `ecrecover` the signer address from the supplied (r, s, v). If the msgpack
-    /// serialization, struct hash, or signing hash logic ever drifts, the
-    /// recovered address will change and this test will fail.
-    #[test]
-    fn ecrecover_matches_specific_place_order_request() {
-        let order = make_limit_order("63000", "buy", "0.5", "1.0", "gtc");
-        let action = action_place_order(vec![order]);
-        let nonce = 1777030979418u64;
-        let expires_after = Some(1777034579418u64);
-
-        // Compute the EIP-712 signing hash directly (bypass env-driven chain_env).
-        let conn_id =
-            connection_id(&action, nonce, expires_after, None).unwrap_or_else(|_| unreachable!());
-        let struct_hash = agent_struct_hash("Mainnet", &conn_id);
-        let digest = eip712_signing_hash(ChainType::Mainnet.chain_id(), struct_hash);
-        let digest_hex = format!("0x{}", hex_encode(&digest));
-
-        // Reassemble 65-byte signature (r || s || v) from the request.
-        let r = "3062926573fa8469207efb2db9c84895bbc9856a0cd2143e2b556999ac3f4dc1";
-        let s = "1311976cf5130af88d4295674c196364bfd76974c41f85c2a298469781bbdb5f";
-        let v: u8 = 1;
-        let sig = format!("0x{r}{s}{v:02x}");
-
-        // Pin the signing hash first - sharper failure signal if msgpack /
-        // struct hash / domain separator changes.
-        assert_eq!(
-            digest_hex, "0x5d4d16c032be69891a190a7f26ac9ca2e4590d500f6fed69bcf234b2c6f294e7",
-            "signing hash drift",
-        );
-
-        let recovered = ecrecover(&digest_hex, &sig).unwrap_or_else(|_| unreachable!());
-        assert_eq!(
-            recovered.to_lowercase(),
-            "0xcb3aae6816a93ea75cbcf5965aeb1f7302171872",
-            "recovered signer drift (digest={digest_hex})",
-        );
-    }
 
     // -- Sample sanity check (client order id + signature, ad-hoc) -------------
 
@@ -767,7 +705,7 @@ mod tests {
 
         // Rebuild the action exactly as in the sample.
         let order = OrderRequest {
-            client_order_id: Some(client_order_id.to_string()),
+            client_order_id: client_order_id.to_string(),
             ..make_limit_order("100170100", "buy", "0.41", "1.0", "gtc")
         };
         let action = action_place_order(vec![order]);
@@ -818,7 +756,7 @@ mod tests {
 
         let sigs: Vec<String> = actions
             .iter()
-            .map(|a| sign_action(a, nonce, None, None, &key).expect("sign"))
+            .map(|a| sign_action(a, nonce, None, None, ChainType::Mainnet, &key).expect("sign"))
             .collect();
 
         // Every signature should be unique

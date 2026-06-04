@@ -21,7 +21,6 @@ pub enum Region {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Env {
-    Pre = 0,
     Prod = 1,
 }
 
@@ -42,7 +41,7 @@ const RANDOM_BYTES: usize = 15;
 /// Generate a spec-compliant client order ID from a CSPRNG with explicit region/env.
 ///
 /// Most callers should prefer [`generate_client_order_id_default`], which resolves the
-/// `(region, env)` tuple from the registered context or environment variables.
+/// `(region, env)` tuple from the registered context or the compiled-in default.
 pub fn generate_client_order_id(region: Region, env: Env) -> Result<String, String> {
     let mut bytes = [0u8; RANDOM_BYTES];
     getrandom::getrandom(&mut bytes).map_err(|e| format!("CSPRNG failure: {e}"))?;
@@ -52,13 +51,14 @@ pub fn generate_client_order_id(region: Region, env: Env) -> Result<String, Stri
 /// Generate a spec-compliant client order ID using the resolved `(region, env)` tuple.
 ///
 /// Resolution order:
-/// 1. Context registered via [`register_client_order_id_context`] (highest priority -
-///    intended for native iOS/Android startup hooks).
-/// 2. `OUTCOMES_REGION` (`HK`/`US`/`EU`) and `OUTCOMES_ENV` (`PRE`/`PROD`)
-///    environment variables, parsed independently. Unset/unparseable values
-///    fall through to the default for that field only.
-/// 3. Default: `Region::Hk` / `Env::Pre`. Aligns with the spec's HK-PRE
-///    fallback rule for invalid client order IDs - keeps unattributed orders consistent.
+/// 1. Context registered via [`register_client_order_id_context`] (intended for
+///    native iOS/Android startup hooks or a one-time host-app init).
+/// 2. Default: `Region::Hk` / `Env::Prod`.
+///
+/// The SDK reads no environment variables. To drive region/env from your own
+/// configuration, either call [`register_client_order_id_context`] once at
+/// startup or pass the values explicitly to [`generate_client_order_id`]
+/// (parse them yourself with [`parse_region_str`] / [`parse_env_str`]).
 pub fn generate_client_order_id_default() -> Result<String, String> {
     let (region, env) = resolve_context();
     generate_client_order_id(region, env)
@@ -88,7 +88,7 @@ pub fn register_client_order_id_context(region: Region, env: Env) {
     *guard = Some((region, env));
 }
 
-/// Clear the registered context, falling back to env vars / defaults.
+/// Clear the registered context, falling back to the compiled-in default.
 ///
 /// Test-only - `#[cfg(test)]` keeps this symbol out of non-test builds so it
 /// cannot be called from production code or external crates. Tests inside this
@@ -108,35 +108,17 @@ fn client_order_id_context_slot() -> &'static std::sync::RwLock<Option<(Region, 
 }
 
 fn resolve_context() -> (Region, Env) {
-    {
-        let guard = client_order_id_context_slot().read().unwrap_or_else(|poisoned| {
+    let guard = client_order_id_context_slot()
+        .read()
+        .unwrap_or_else(|poisoned| {
             eprintln!(
                 "warn: okx_outcomes_sdk::signing::client_order_id: resolve_context recovered from poisoned lock"
             );
             poisoned.into_inner()
         });
-        if let Some(ctx) = *guard {
-            return ctx;
-        }
-    } // release the read lock before doing the env-var lookup below
-    resolve_from_env_or_default(|k| std::env::var(k).ok())
-}
-
-/// Pure version of [`resolve_context`]'s env-var path - testable without
-/// touching real environment variables.
-fn resolve_from_env_or_default<F>(getter: F) -> (Region, Env)
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let region = getter("OUTCOMES_REGION")
-        .as_deref()
-        .and_then(parse_region_str)
-        .unwrap_or(Region::Hk);
-    let env = getter("OUTCOMES_ENV")
-        .as_deref()
-        .and_then(parse_env_str)
-        .unwrap_or(Env::Pre);
-    (region, env)
+    // Registered context if present, else the compiled-in HK-PROD default. The
+    // SDK never reads environment variables.
+    guard.unwrap_or((Region::Hk, Env::Prod))
 }
 
 /// Parse a region string (case-insensitive, trim whitespace). Accepts only
@@ -152,12 +134,11 @@ pub fn parse_region_str(s: &str) -> Option<Region> {
 
 /// Parse an env string (case-insensitive, trim whitespace).
 ///
-/// Spec-strict: only "PRE" and "PROD" are accepted. Aliases like "STAGING",
-/// "LIVE", "PRODUCTION" are intentionally rejected to keep client order ID
-/// prefixes consistent across services.
+/// Spec-strict: only "PROD" is accepted. Aliases like "STAGING", "LIVE",
+/// "PRODUCTION" are intentionally rejected to keep client order ID prefixes
+/// consistent across services.
 pub fn parse_env_str(s: &str) -> Option<Env> {
     match s.trim().to_ascii_uppercase().as_str() {
-        "PRE" => Some(Env::Pre),
         "PROD" => Some(Env::Prod),
         _ => None,
     }
@@ -191,9 +172,10 @@ pub fn validate_client_order_id(s: &str) -> bool {
 
 /// Parse the (region, env) prefix from a client order ID.
 ///
-/// Per spec section 7, any invalid input (null/empty, missing `0x`, length < 4,
-/// or non-hex region/env nibble) falls back to HK-PRE `(0, 0)` to keep legacy
-/// orders attributable.
+/// Any invalid input (null/empty, missing `0x`, length < 4, or non-hex
+/// region/env nibble) falls back to the `(0, 0)` sentinel. `(0, 0)` is distinct
+/// from any value [`generate_client_order_id`] emits (env nibble is always `1`
+/// for `Prod`), so an unparseable ID is never mistaken for a generated one.
 pub fn parse_client_order_id_prefix(client_order_id: Option<&str>) -> ClientOrderIdPrefix {
     let fallback = ClientOrderIdPrefix { region: 0, env: 0 };
     let s = match client_order_id {
@@ -217,18 +199,17 @@ mod tests {
     #[test]
     fn generated_client_order_id_matches_spec_shape() {
         let client_order_id =
-            generate_client_order_id(Region::Hk, Env::Pre).unwrap_or_else(|_| unreachable!());
+            generate_client_order_id(Region::Hk, Env::Prod).unwrap_or_else(|_| unreachable!());
         assert_eq!(client_order_id.len(), CLIENT_ORDER_ID_LEN);
-        assert!(client_order_id.starts_with("0x00"));
+        assert!(client_order_id.starts_with("0x01"));
         assert!(validate_client_order_id(&client_order_id));
     }
 
     #[test]
     fn region_env_combinations_round_trip() {
         for (region, env, want_prefix) in [
-            (Region::Hk, Env::Pre, "0x00"),
+            (Region::Hk, Env::Prod, "0x01"),
             (Region::Us, Env::Prod, "0x11"),
-            (Region::Eu, Env::Pre, "0x20"),
             (Region::Eu, Env::Prod, "0x21"),
         ] {
             let client_order_id =
@@ -266,7 +247,7 @@ mod tests {
     // callers actually receive from `generate_client_order_id`.
 
     #[test]
-    fn vector_hk_pre_is_valid() {
+    fn vector_region0_env0_is_valid() {
         let s = "0x00a3f1b2c4d5e6789012345abcdef012";
         assert_eq!(s.len(), 34);
         assert!(validate_client_order_id(s));
@@ -284,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn vector_eu_pre_is_valid() {
+    fn vector_eu_env0_is_valid() {
         let s = "0x205fedcba9876543210abcdef0123456";
         assert_eq!(s.len(), 34);
         assert!(validate_client_order_id(s));
@@ -308,7 +289,7 @@ mod tests {
     // -- Parser fallback (section 7) ---------------------------------
 
     #[test]
-    fn parse_falls_back_to_hk_pre_on_invalid_input() {
+    fn parse_falls_back_to_zero_sentinel_on_invalid_input() {
         for input in [
             None,
             Some(""),
@@ -322,7 +303,7 @@ mod tests {
             assert_eq!(
                 (p.region, p.env),
                 (0, 0),
-                "expected HK-PRE fallback for {input:?}"
+                "expected (0, 0) sentinel for {input:?}"
             );
         }
     }
@@ -355,13 +336,12 @@ mod tests {
     }
 
     #[test]
-    fn env_str_only_accepts_pre_and_prod() {
-        assert_eq!(parse_env_str("PRE"), Some(Env::Pre));
-        assert_eq!(parse_env_str("pre"), Some(Env::Pre));
-        assert_eq!(parse_env_str(" Pre "), Some(Env::Pre));
+    fn env_str_only_accepts_prod() {
         assert_eq!(parse_env_str("PROD"), Some(Env::Prod));
         assert_eq!(parse_env_str("prod"), Some(Env::Prod));
-        // Aliases intentionally rejected - keep client order ID prefixes consistent.
+        assert_eq!(parse_env_str(" Prod "), Some(Env::Prod));
+        // Everything else is rejected - keep client order ID prefixes consistent.
+        assert_eq!(parse_env_str("pre"), None);
         assert_eq!(parse_env_str("staging"), None);
         assert_eq!(parse_env_str("preprod"), None);
         assert_eq!(parse_env_str("Production"), None);
@@ -370,58 +350,18 @@ mod tests {
         assert_eq!(parse_env_str(""), None);
     }
 
-    // -- Env-var fallback (pure resolver) ----------------------------
-
-    #[test]
-    fn env_resolver_uses_both_vars_when_set() {
-        let env = std::collections::HashMap::from([
-            ("OUTCOMES_REGION".to_string(), "US".to_string()),
-            ("OUTCOMES_ENV".to_string(), "PROD".to_string()),
-        ]);
-        let (r, e) = resolve_from_env_or_default(|k| env.get(k).cloned());
-        assert_eq!((r, e), (Region::Us, Env::Prod));
-    }
-
-    #[test]
-    fn env_resolver_falls_back_per_field() {
-        // Only region set - env should default to Pre.
-        let env =
-            std::collections::HashMap::from([("OUTCOMES_REGION".to_string(), "EU".to_string())]);
-        let (r, e) = resolve_from_env_or_default(|k| env.get(k).cloned());
-        assert_eq!((r, e), (Region::Eu, Env::Pre));
-    }
-
-    #[test]
-    fn env_resolver_ignores_garbage_values() {
-        let env = std::collections::HashMap::from([
-            ("OUTCOMES_REGION".to_string(), "MARS".to_string()),
-            ("OUTCOMES_ENV".to_string(), "yolo".to_string()),
-        ]);
-        let (r, e) = resolve_from_env_or_default(|k| env.get(k).cloned());
-        assert_eq!((r, e), (Region::Hk, Env::Pre), "fallback to HK-PRE");
-    }
-
-    #[test]
-    fn env_resolver_default_when_unset() {
-        let (r, e) = resolve_from_env_or_default(|_| None);
-        assert_eq!((r, e), (Region::Hk, Env::Pre));
-    }
-
     // -- register / clear precedence ---------------------------------
     //
     // These mutate process-global state, so we serialize all global-context
     // assertions in a single test to avoid races between parallel test runs.
 
     #[test]
-    fn registered_context_overrides_env_and_default() {
+    fn registered_context_overrides_default() {
         clear_client_order_id_context();
 
-        // 1. After clear, resolve_context falls through to env-or-default.
-        //    We can't safely set env vars here (parallel tests share env),
-        //    so just assert the default path returns a usable value.
-        let (r, e) = resolve_context();
-        assert!(matches!(r, Region::Hk | Region::Us | Region::Eu));
-        assert!(matches!(e, Env::Pre | Env::Prod));
+        // 1. After clear, resolve_context returns the compiled-in HK-PROD
+        //    default (the SDK reads no environment variables).
+        assert_eq!(resolve_context(), (Region::Hk, Env::Prod));
 
         // 2. Register an override and confirm it wins.
         register_client_order_id_context(Region::Us, Env::Prod);
@@ -429,15 +369,15 @@ mod tests {
         assert_eq!((r, e), (Region::Us, Env::Prod));
 
         // 3. Re-register overwrites.
-        register_client_order_id_context(Region::Eu, Env::Pre);
+        register_client_order_id_context(Region::Eu, Env::Prod);
         let (r, e) = resolve_context();
-        assert_eq!((r, e), (Region::Eu, Env::Pre));
+        assert_eq!((r, e), (Region::Eu, Env::Prod));
 
         // 4. generate_client_order_id_default uses the registered context.
         let client_order_id = generate_client_order_id_default().unwrap_or_else(|_| unreachable!());
         assert!(
-            client_order_id.starts_with("0x20"),
-            "expected EU-PRE prefix: {client_order_id}"
+            client_order_id.starts_with("0x21"),
+            "expected EU-PROD prefix: {client_order_id}"
         );
         assert!(validate_client_order_id(&client_order_id));
 
