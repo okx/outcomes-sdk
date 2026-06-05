@@ -357,7 +357,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `pm-trades` | `WsMessage::Trades` |
 | `pm-tickers` | `WsMessage::Tickers` |
 | `pm-event-status` | `WsMessage::EventStatus` |
-| `game-status` | `WsMessage::Game` |
 | `pm-candle*` （任意周期） | `WsMessage::Candle` |
 
 ### 私有频道（需要登录）

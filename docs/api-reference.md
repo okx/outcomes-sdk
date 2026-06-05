@@ -770,7 +770,6 @@ pub enum WsMessage {
     Books { data: Vec<WsPmBookData>, action: String }, // action = "snapshot" | "update"
     Trades(Vec<WsPmTrade>),
     Tickers(Vec<WsPmTicker>),
-    Game(Vec<WsGameStatus>),
     EventStatus(Vec<WsEventStatus>),
     Candle(Vec<Candle>),                   // typed wrapper over the 9-column OHLCV array
     Orders(Vec<WsOrder>),
@@ -866,25 +865,6 @@ struct WsPmTicker {
     vol24h:     String, vol_ccy24h: String,
     sod_utc0:   String, sod_utc8: String,
     ts:         String,
-}
-```
-
-**`game-status`**
-
-Sports match progress.
-
-- **Subscribe params:** `[{"instId": "<game_id>"}]`.
-- **Message variant:** `WsMessage::Game(Vec<WsGameStatus>)`.
-
-```rust
-struct WsGameStatus {
-    game_id:          String,
-    home_team:        String, away_team: String,
-    status:           String, // "upcoming" / "live" / "final"
-    home_team_score:  String, away_team_score: String,
-    period:           String, // "Q1", "Half-time", etc.
-    schedule_time:    String,
-    timestamp:        String,
 }
 ```
 
