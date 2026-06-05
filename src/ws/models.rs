@@ -29,7 +29,7 @@ pub struct WsPrivatePushEnvelope<T> {
 
 /// Subscription arg in the push envelope.
 ///
-/// `inst_id` is set on public channels (the asset/event/game id the
+/// `inst_id` is set on public channels (the asset/event id the
 /// subscriber asked for); `uid` is set on private channels (the CEX
 /// user id the push is scoped to). Both are optional on the struct so
 /// either envelope shape parses cleanly.
@@ -75,21 +75,6 @@ pub struct WsEventStatus {
     /// Winning outcome display: `"yes"` / `"no"` / `"others"` / team name / `"draw"`.
     #[serde(default)]
     pub outcome_option: String,
-    pub timestamp: String,
-}
-
-/// game-status — sports match progress.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WsGameStatus {
-    pub game_id: String,
-    pub home_team: String,
-    pub away_team: String,
-    pub status: String,
-    pub home_team_score: String,
-    pub away_team_score: String,
-    pub period: String,
-    pub schedule_time: String,
     pub timestamp: String,
 }
 
@@ -594,8 +579,6 @@ pub enum WsMessage {
     Trades(Vec<WsPmTrade>),
     /// `pm-tickers` — real-time ticker data.
     Tickers(Vec<WsPmTicker>),
-    /// `game-status` — sports match progress.
-    Game(Vec<WsGameStatus>),
     /// `pm-event-status` — event settlement result.
     EventStatus(Vec<WsEventStatus>),
     /// `pm-candle*` — candlestick data (OHLCV arrays, same column
@@ -678,10 +661,6 @@ pub fn parse_ws_message(channel: &str, payload: &str) -> Option<WsMessage> {
             let env: WsPushEnvelope<WsPmTicker> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::Tickers(env.data))
         }
-        "game-status" => {
-            let env: WsPushEnvelope<WsGameStatus> = serde_json::from_str(payload).ok()?;
-            Some(WsMessage::Game(env.data))
-        }
         "pm-event-status" => {
             let env: WsPushEnvelope<WsEventStatus> = serde_json::from_str(payload).ok()?;
             Some(WsMessage::EventStatus(env.data))
@@ -749,23 +728,6 @@ mod tests {
         assert_eq!(tick.yes_asset_id, "asset_001");
         assert_eq!(tick.best_bid, "0.63");
         assert_eq!(tick.probability, "6500");
-    }
-
-    #[test]
-    fn game_status_roundtrip() {
-        let json = r#"{
-            "gameId": "1317359",
-            "homeTeam": "Lakers",
-            "awayTeam": "Celtics",
-            "status": "live",
-            "homeTeamScore": "101",
-            "awayTeamScore": "100",
-            "period": "Q4",
-            "scheduleTime": "1773632746",
-            "timestamp": "1672290687"
-        }"#;
-        let game: WsGameStatus = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(game.home_team_score, "101");
     }
 
     #[test]

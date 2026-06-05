@@ -358,7 +358,6 @@ Public channels and the `WsMessage` variant each one produces:
 | `pm-trades` | `WsMessage::Trades` |
 | `pm-tickers` | `WsMessage::Tickers` |
 | `pm-event-status` | `WsMessage::EventStatus` |
-| `game-status` | `WsMessage::Game` |
 | `pm-candle*` (any timeframe) | `WsMessage::Candle` |
 
 ### Private channels (login required)

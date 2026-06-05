@@ -767,7 +767,6 @@ pub enum WsMessage {
     Books { data: Vec<WsPmBookData>, action: String }, // action = "snapshot" | "update"
     Trades(Vec<WsPmTrade>),
     Tickers(Vec<WsPmTicker>),
-    Game(Vec<WsGameStatus>),
     EventStatus(Vec<WsEventStatus>),
     Candle(Vec<Candle>),                   // 类型化包装,9 列 OHLCV 数组
     Orders(Vec<WsOrder>),
@@ -863,25 +862,6 @@ struct WsPmTicker {
     vol24h:     String, vol_ccy24h: String,
     sod_utc0:   String, sod_utc8: String,
     ts:         String,
-}
-```
-
-**`game-status`**
-
-体育赛事进度。
-
-- **订阅参数:** `[{"instId": "<game_id>"}]`。
-- **消息变体:** `WsMessage::Game(Vec<WsGameStatus>)`。
-
-```rust
-struct WsGameStatus {
-    game_id:          String,
-    home_team:        String, away_team: String,
-    status:           String, // "upcoming" / "live" / "final"
-    home_team_score:  String, away_team_score: String,
-    period:           String, // "Q1"、"Half-time" 等
-    schedule_time:    String,
-    timestamp:        String,
 }
 ```
 
