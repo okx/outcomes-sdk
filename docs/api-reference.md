@@ -378,8 +378,8 @@ Renew the dead-man's switch protecting active orders.
 pub async fn heartbeat(&self, req: &CancelAllRequest) -> Result<HeartbeatResponse, SdkError>;
 
 struct HeartbeatResponse {
-    server_timestamp: i64, // server's current time (ms)
-    expire_at:        i64, // when this heartbeat expires (ms)
+    server_timestamp: String, // server's current time (ms, as string)
+    expire_at:        String, // when this heartbeat expires (ms, as string)
 }
 ```
 

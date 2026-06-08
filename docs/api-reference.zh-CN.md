@@ -375,8 +375,8 @@ struct CancelAllAction {
 pub async fn heartbeat(&self, req: &CancelAllRequest) -> Result<HeartbeatResponse, SdkError>;
 
 struct HeartbeatResponse {
-    server_timestamp: i64, // 服务端当前时间(ms)
-    expire_at:        i64, // 本次心跳过期的时间(ms)
+    server_timestamp: String, // 服务端当前时间(ms,字符串)
+    expire_at:        String, // 本次心跳过期的时间(ms,字符串)
 }
 ```
 

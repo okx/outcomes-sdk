@@ -424,10 +424,10 @@ pub struct CancelAllRequest {
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatResponse {
-    /// Server's current timestamp (ms).
-    pub server_timestamp: i64,
-    /// Timestamp at which this heartbeat expires (ms).
-    pub expire_at: i64,
+    /// Server's current timestamp (ms, as a decimal string).
+    pub server_timestamp: String,
+    /// Timestamp at which this heartbeat expires (ms, as a decimal string).
+    pub expire_at: String,
 }
 
 // -- Order Record ----------------------------------------
@@ -472,6 +472,20 @@ pub struct OrderRecord {
 
 /// Response from `GET /api/v5/predictions/orders`.
 pub type OrdersResponse = crate::models::common::PagedListResponse<OrderRecord>;
+
+#[cfg(test)]
+mod heartbeat_tests {
+    use super::HeartbeatResponse;
+
+    #[test]
+    fn heartbeat_response_deserializes_string_timestamps() {
+        // The backend sends serverTimestamp / expireAt as decimal strings.
+        let json = r#"{"serverTimestamp":"1708929600000","expireAt":"1708929900000"}"#;
+        let resp: HeartbeatResponse = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(resp.server_timestamp, "1708929600000");
+        assert_eq!(resp.expire_at, "1708929900000");
+    }
+}
 
 #[cfg(all(test, feature = "signing"))]
 mod try_from_order_request_tests {
