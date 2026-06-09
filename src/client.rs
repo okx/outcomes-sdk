@@ -14,11 +14,12 @@ const DEFAULT_BASE_URL: &str = "https://www.okx.com";
 /// debug builds with debug logging enabled. Defense-in-depth on top of the
 /// debug-build gate: a captured debug log (CI artifact, shared screen, pasted
 /// ticket) still cannot leak a reusable credential.
-const SENSITIVE_HEADERS: [&str; 4] = [
+const SENSITIVE_HEADERS: [&str; 5] = [
     "ok-access-sign",
     "ok-access-passphrase",
     "ok-access-key",
     "ok-access-timestamp",
+    "authorization",
 ];
 
 /// Render a request header value for debug output, replacing the value of any
@@ -101,6 +102,10 @@ pub struct OutcomesSdkClient {
     pub(crate) http: reqwest::Client,
     pub(crate) base_url: String,
     pub(crate) credentials: Option<ApiCredentials>,
+    /// OAuth bearer access token. When set, requests authenticate with an
+    /// `Authorization: Bearer <token>` header instead of the `OK-ACCESS-*`
+    /// HMAC signing headers. Takes precedence over `credentials`.
+    pub(crate) bearer_token: Option<String>,
     /// Whether to log requests/responses to stderr. Configured via the builder
     /// (`debug(true)`); honored only in debug builds (see request helpers).
     pub(crate) debug: bool,
@@ -111,10 +116,10 @@ pub struct OutcomesSdkClient {
     pub(crate) extra_headers: reqwest::header::HeaderMap,
 }
 
-// Hand-written so the API-key credentials are never emitted by `{:?}` / `dbg!`.
-// The auth field shows only whether it is configured (`Some(<redacted>)` /
-// `None`), never the value. Deliberately not `#[derive(Debug)]`, which would
-// print the secrets.
+// Hand-written so neither the API-key credentials nor the OAuth bearer token is
+// ever emitted by `{:?}` / `dbg!`. Auth fields show only whether they are
+// configured (`Some(<redacted>)` / `None`), never the value. Deliberately not
+// `#[derive(Debug)]`, which would print the secrets.
 impl std::fmt::Debug for OutcomesSdkClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OutcomesSdkClient")
@@ -122,6 +127,10 @@ impl std::fmt::Debug for OutcomesSdkClient {
             .field(
                 "credentials",
                 &self.credentials.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "bearer_token",
+                &self.bearer_token.as_ref().map(|_| "<redacted>"),
             )
             .field("debug", &self.debug)
             .field("extra_headers", &self.extra_headers)
@@ -152,6 +161,7 @@ impl TradingMode {
 #[derive(Default)]
 pub struct OutcomesSdkClientBuilder {
     credentials: Option<ApiCredentials>,
+    bearer_token: Option<String>,
     base_url: Option<String>,
     mode: Option<TradingMode>,
     accept_language: Option<String>,
@@ -163,6 +173,15 @@ impl OutcomesSdkClientBuilder {
     /// API-key credentials for HMAC-signed REST auth.
     pub fn credentials(mut self, credentials: ApiCredentials) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+
+    /// OAuth bearer access token. Takes precedence over [`credentials`]; requests
+    /// carry `Authorization: Bearer <token>` instead of the `OK-ACCESS-*` headers.
+    ///
+    /// [`credentials`]: Self::credentials
+    pub fn bearer_token(mut self, access_token: impl Into<String>) -> Self {
+        self.bearer_token = Some(access_token.into());
         self
     }
 
@@ -255,6 +274,7 @@ impl OutcomesSdkClientBuilder {
                 .unwrap_or_else(|_| reqwest::Client::new()),
             base_url,
             credentials: self.credentials,
+            bearer_token: self.bearer_token,
             debug: self.debug,
             extra_headers,
         }
@@ -287,6 +307,25 @@ impl OutcomesSdkClient {
     ) -> Self {
         Self::builder()
             .credentials(credentials)
+            .base_url(base_url)
+            .build()
+    }
+
+    /// Create a client that authenticates with an OAuth bearer access token.
+    ///
+    /// Requests carry `Authorization: Bearer <token>` instead of the
+    /// `OK-ACCESS-*` HMAC headers. The token is supplied by the caller.
+    pub fn with_bearer_token(access_token: impl Into<String>) -> Self {
+        Self::builder().bearer_token(access_token).build()
+    }
+
+    /// Create a bearer-token client pointing at a custom base URL.
+    pub fn with_bearer_token_and_url(
+        access_token: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self::builder()
+            .bearer_token(access_token)
             .base_url(base_url)
             .build()
     }
@@ -324,6 +363,17 @@ impl OutcomesSdkClient {
         request_path: &str,
         body: &str,
     ) -> Result<reqwest::RequestBuilder, SdkError> {
+        // OAuth bearer auth takes precedence: no request signing, just the
+        // `Authorization: Bearer <token>` header plus the shared extra headers.
+        if let Some(token) = &self.bearer_token {
+            let mut builder =
+                builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+            for (name, value) in self.extra_headers.iter() {
+                builder = builder.header(name, value);
+            }
+            return Ok(builder);
+        }
+
         let Some(creds) = &self.credentials else {
             return Err(SdkError::NotAuthenticated {
                 hint: "build the client via OutcomesSdkClient::with_credentials \
@@ -576,6 +626,40 @@ mod tests {
             .credentials(sample_credentials())
             .build();
         assert!(client.extra_headers.get("X-Predictions-Mode").is_none());
+    }
+
+    #[test]
+    fn bearer_token_sets_authorization_and_skips_hmac_headers() {
+        let client = OutcomesSdkClient::with_bearer_token("tok-123");
+        let builder = client
+            .http
+            .get("https://www.okx.com/api/v5/predictions/balance");
+        let req = client
+            .attach_auth(builder, "GET", "/api/v5/predictions/balance", "")
+            .expect("bearer auth attaches")
+            .build()
+            .expect("request builds");
+
+        assert_eq!(
+            req.headers().get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer tok-123"
+        );
+        // The HMAC signing headers must not be present on the bearer path.
+        assert!(req.headers().get("OK-ACCESS-KEY").is_none());
+        assert!(req.headers().get("OK-ACCESS-SIGN").is_none());
+        assert!(req.headers().get("OK-ACCESS-PASSPHRASE").is_none());
+    }
+
+    #[test]
+    fn debug_does_not_leak_bearer_token() {
+        let client = OutcomesSdkClient::with_bearer_token("super-secret-token");
+        let rendered = format!("{client:?}");
+        assert!(
+            !rendered.contains("super-secret-token"),
+            "Debug leaked the bearer token: {rendered}"
+        );
+        assert!(rendered.contains("bearer_token"));
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]
