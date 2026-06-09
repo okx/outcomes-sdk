@@ -116,6 +116,8 @@ fn websocket_surface_is_reachable() {
         .host(okx_outcomes_sdk::ws::endpoints::EU_WS_HOST)
         .debug(true)
         .build();
+    // Bearer-token WS auth (sent as the Authorization header on the handshake).
+    let _ws_bearer = OutcomesWsClient::builder().bearer_token("token").build();
     let _ = OutcomesWsClient::new();
     let _ = OutcomesWsClient::with_host(okx_outcomes_sdk::ws::endpoints::US_WS_HOST);
 

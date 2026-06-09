@@ -75,6 +75,11 @@ struct SharedState {
     subscriptions: Arc<Mutex<Vec<Subscription>>>,
     /// Credentials for private channel login; replayed on reconnect.
     credentials: Mutex<Option<ApiCredentials>>,
+    /// OAuth bearer access token. When set, it authenticates the connection via
+    /// an `Authorization: Bearer <token>` header on the WS handshake (same as
+    /// the REST client) — no HMAC `login` frame is sent. Re-applied on every
+    /// reconnect since it's part of the handshake.
+    bearer_token: Option<String>,
     /// Oneshot sender to signal login result to the `login()` caller.
     /// Set before sending login, consumed by the reader when it sees a login response.
     #[allow(clippy::type_complexity)]
@@ -99,6 +104,7 @@ pub struct OutcomesWsClient {
 #[derive(Default)]
 pub struct OutcomesWsClientBuilder {
     host: Option<String>,
+    bearer_token: Option<String>,
     debug: bool,
 }
 
@@ -106,6 +112,15 @@ impl OutcomesWsClientBuilder {
     /// Override the WebSocket host. Defaults to `DEFAULT_WS_HOST`.
     pub fn host(mut self, host: impl Into<String>) -> Self {
         self.host = Some(host.into());
+        self
+    }
+
+    /// OAuth bearer access token. When set, the connection authenticates via an
+    /// `Authorization: Bearer <token>` header on the WS handshake (the same
+    /// header the REST client uses) — private channels then need no `login`
+    /// call. The token is re-applied automatically on reconnect.
+    pub fn bearer_token(mut self, access_token: impl Into<String>) -> Self {
+        self.bearer_token = Some(access_token.into());
         self
     }
 
@@ -122,6 +137,7 @@ impl OutcomesWsClientBuilder {
             shared: Arc::new(SharedState {
                 host: self.host.unwrap_or_else(|| DEFAULT_WS_HOST.to_string()),
                 debug: self.debug,
+                bearer_token: self.bearer_token,
                 path: Mutex::new(String::new()),
                 sender: Arc::new(Mutex::new(None)),
                 on_data: Arc::new(std::sync::Mutex::new(None)),
@@ -190,7 +206,31 @@ fn do_connect(ss: Arc<SharedState>) -> BoxFutureSend<ConnectResult> {
             message: format!("Invalid WS URL: {e}"),
         })?;
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(parsed)
+        // Build the handshake request so we can attach the OAuth bearer header
+        // (same `Authorization: Bearer <token>` the REST client uses). When set,
+        // it authenticates the connection — no HMAC `login` frame is needed.
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request =
+            parsed
+                .as_str()
+                .into_client_request()
+                .map_err(|e| SdkError::WebSocket {
+                    message: format!("invalid WS request: {e}"),
+                })?;
+        if let Some(token) = &ss.bearer_token {
+            let value = tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&format!(
+                "Bearer {token}"
+            ))
+            .map_err(|e| SdkError::WebSocket {
+                message: format!("invalid bearer token header value: {e}"),
+            })?;
+            request.headers_mut().insert(
+                tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+                value,
+            );
+        }
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| SdkError::WebSocket {
                 message: format!("WS connect failed: {e}"),
