@@ -167,6 +167,7 @@ pub struct OutcomesSdkClientBuilder {
     accept_language: Option<String>,
     timeout_secs: Option<u64>,
     debug: bool,
+    http_client: Option<reqwest::Client>,
 }
 
 impl OutcomesSdkClientBuilder {
@@ -218,6 +219,11 @@ impl OutcomesSdkClientBuilder {
         self
     }
 
+    pub fn http_client(mut self, client: reqwest::Client) -> Self {
+        self.http_client = Some(client);
+        self
+    }
+
     /// Build the configured [`OutcomesSdkClient`].
     pub fn build(self) -> OutcomesSdkClient {
         let base_url = self
@@ -264,14 +270,17 @@ impl OutcomesSdkClientBuilder {
         // Disable redirect following so the `OK-ACCESS-*` headers can never be
         // replayed to a redirect target (reqwest does not strip custom headers
         // across hosts). TLS certificate verification is always on.
-        let http_builder = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(timeout_secs))
-            .redirect(reqwest::redirect::Policy::none());
-
-        OutcomesSdkClient {
-            http: http_builder
+        let http = match self.http_client {
+            Some(c) => c,
+            None => reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+        };
+
+        OutcomesSdkClient {
+            http,
             base_url,
             credentials: self.credentials,
             bearer_token: self.bearer_token,
