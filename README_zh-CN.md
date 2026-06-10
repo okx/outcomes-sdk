@@ -33,10 +33,11 @@ tokio = { version = "1", features = ["full"] }
 ```rust
 use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};
 
+// 按你喜欢的方式提供凭证即可 —— SDK 不会替你加载。
 let creds = ApiCredentials {
-    api_key:    std::env::var("OUTCOMES_API_KEY")?,
-    secret_key: std::env::var("OUTCOMES_API_SECRET")?,
-    passphrase: std::env::var("OUTCOMES_API_PASSPHRASE")?,
+    api_key:    "your-api-key".into(),
+    secret_key: "your-secret-key".into(),
+    passphrase: "your-passphrase".into(),
 };
 let client = OutcomesSdkClient::with_credentials(creds);
 ```
@@ -169,15 +170,16 @@ use okx_outcomes_sdk::signing::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 按你喜欢的方式提供凭证即可 —— SDK 不会替你加载。
     let creds = ApiCredentials {
-        api_key:    std::env::var("OUTCOMES_API_KEY")?,
-        secret_key: std::env::var("OUTCOMES_API_SECRET")?,
-        passphrase: std::env::var("OUTCOMES_API_PASSPHRASE")?,
+        api_key:    "your-api-key".into(),
+        secret_key: "your-secret-key".into(),
+        passphrase: "your-passphrase".into(),
     };
     let client = OutcomesSdkClient::with_credentials(creds);
 
     // 1. 加载链上签名私钥（hex 格式，可带可不带 0x 前缀）。
-    let key = parse_private_key(&std::env::var("OUTCOMES_SIGNING_KEY")?)?;
+    let key = parse_private_key("your-signing-key-hex")?;
 
     // 2. 构造类型化的订单。`asset_id` 是 outcome asset ID。
     let order_request = OrderRequest {

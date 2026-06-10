@@ -12,10 +12,12 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Supply your OKX API credentials however you prefer (config, secrets
+//!     // manager, env vars, etc.) — the SDK does not load them for you.
 //!     let creds = ApiCredentials {
-//!         api_key:    std::env::var("OUTCOMES_API_KEY")?,
-//!         secret_key: std::env::var("OUTCOMES_API_SECRET")?,
-//!         passphrase: std::env::var("OUTCOMES_API_PASSPHRASE")?,
+//!         api_key:    "your-api-key".into(),
+//!         secret_key: "your-secret-key".into(),
+//!         passphrase: "your-passphrase".into(),
 //!     };
 //!     let client = OutcomesSdkClient::with_credentials(creds);
 //!

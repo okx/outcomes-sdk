@@ -33,10 +33,11 @@ All REST endpoints require OKX API credentials. Construct the client with `with_
 ```rust
 use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};
 
+// Supply your credentials however you prefer — the SDK does not load them for you.
 let creds = ApiCredentials {
-    api_key:    std::env::var("OUTCOMES_API_KEY")?,
-    secret_key: std::env::var("OUTCOMES_API_SECRET")?,
-    passphrase: std::env::var("OUTCOMES_API_PASSPHRASE")?,
+    api_key:    "your-api-key".into(),
+    secret_key: "your-secret-key".into(),
+    passphrase: "your-passphrase".into(),
 };
 let client = OutcomesSdkClient::with_credentials(creds);
 ```
@@ -169,15 +170,16 @@ use okx_outcomes_sdk::signing::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Supply your credentials however you prefer — the SDK does not load them for you.
     let creds = ApiCredentials {
-        api_key:    std::env::var("OUTCOMES_API_KEY")?,
-        secret_key: std::env::var("OUTCOMES_API_SECRET")?,
-        passphrase: std::env::var("OUTCOMES_API_PASSPHRASE")?,
+        api_key:    "your-api-key".into(),
+        secret_key: "your-secret-key".into(),
+        passphrase: "your-passphrase".into(),
     };
     let client = OutcomesSdkClient::with_credentials(creds);
 
     // 1. Load the on-chain signing key (hex, with or without 0x prefix).
-    let key = parse_private_key(&std::env::var("OUTCOMES_SIGNING_KEY")?)?;
+    let key = parse_private_key("your-signing-key-hex")?;
 
     // 2. Build the typed order. `asset_id` is the outcome asset ID.
     let order_request = OrderRequest {
