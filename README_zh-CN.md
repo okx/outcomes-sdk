@@ -28,7 +28,16 @@ tokio = { version = "1", features = ["full"] }
 
 ## 鉴权
 
-所有 REST 接口都需要 OKX API 凭证。使用 `with_credentials` 构造客户端：
+公共读取接口 —— 事件（`get_events`、`search`、`get_event`、`get_event_markets`、`get_market`）和行情数据（`get_ticker`、`get_candles`、`get_pm_books`）—— 无需凭证即可调用：
+
+```rust
+use okx_outcomes_sdk::OutcomesSdkClient;
+
+let client = OutcomesSdkClient::unauthenticated();
+let events = client.get_events(None, None, None, None, None, None, None).await?;
+```
+
+其余接口（账户读取 —— 余额 / 订单 / 持仓 / 成交 —— 以及所有写操作）都需要凭证。使用 `with_credentials` 构造客户端：
 
 ```rust
 use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};

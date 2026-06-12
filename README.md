@@ -28,7 +28,16 @@ That is the complete dependency list. `tokio-tungstenite`, `k256`, `alloy-*`, `r
 
 ## Authentication
 
-All REST endpoints require OKX API credentials. Construct the client with `with_credentials`:
+Public reads — events (`get_events`, `search`, `get_event`, `get_event_markets`, `get_market`) and market data (`get_ticker`, `get_candles`, `get_pm_books`) — work without credentials:
+
+```rust
+use okx_outcomes_sdk::OutcomesSdkClient;
+
+let client = OutcomesSdkClient::unauthenticated();
+let events = client.get_events(None, None, None, None, None, None, None).await?;
+```
+
+Everything else (account reads — balance / orders / positions / trades — and all write calls) requires credentials. Construct the client with `with_credentials`:
 
 ```rust
 use okx_outcomes_sdk::{ApiCredentials, OutcomesSdkClient};

@@ -53,7 +53,7 @@ impl OutcomesSdkClient {
         if let Some(ref v) = page_size_str {
             params.push(("pageSize", v));
         }
-        self.http_get(endpoints::EVENTS, &params).await
+        self.http_get_public(endpoints::EVENTS, &params).await
     }
 
     /// `GET /api/v5/predictions/events/search` — Search events and markets by keyword.
@@ -77,24 +77,24 @@ impl OutcomesSdkClient {
         if let Some(ref v) = page_size_str {
             params.push(("pageSize", v));
         }
-        self.http_get(endpoints::SEARCH, &params).await
+        self.http_get_public(endpoints::SEARCH, &params).await
     }
 
     /// `GET /api/v5/predictions/events/{eventId}` — Retrieve a single event with its full market list.
     pub async fn get_event(&self, event_id: &str) -> Result<EventObject, SdkError> {
         let path = format!("{}/{}", endpoints::EVENTS, event_id);
-        self.http_get(&path, &[]).await
+        self.http_get_public(&path, &[]).await
     }
 
     /// `GET /api/v5/predictions/events/{eventId}/markets` — Retrieve all markets for an event (no pagination).
     pub async fn get_event_markets(&self, event_id: &str) -> Result<MarketsResponse, SdkError> {
         let path = format!("{}/{}/markets", endpoints::EVENTS, event_id);
-        self.http_get(&path, &[]).await
+        self.http_get_public(&path, &[]).await
     }
 
     /// `GET /api/v5/predictions/markets/{marketId}` — Retrieve a single market by its ID.
     pub async fn get_market(&self, market_id: &str) -> Result<MarketObject, SdkError> {
         let path = format!("{}/{}", endpoints::MARKETS, market_id);
-        self.http_get(&path, &[]).await
+        self.http_get_public(&path, &[]).await
     }
 }

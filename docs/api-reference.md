@@ -28,6 +28,8 @@ impl OutcomesSdkClient {
     pub fn builder() -> OutcomesSdkClientBuilder;
     pub fn with_credentials(creds: ApiCredentials) -> Self;            // shortcut
     pub fn with_credentials_and_url(creds: ApiCredentials, base_url: impl Into<String>) -> Self;
+    pub fn unauthenticated() -> Self;                                  // public reads only
+    pub fn unauthenticated_with_url(base_url: impl Into<String>) -> Self;
 }
 
 impl OutcomesSdkClientBuilder {
@@ -42,6 +44,8 @@ impl OutcomesSdkClientBuilder {
 ```
 
 All configuration is explicit â€” the SDK reads no environment variables. Base URL resolution: the explicit `.base_url(..)` builder value (or `with_credentials_and_url` arg), else the compiled-in default `https://www.okx.com`. Endpoint constants are full absolute paths (`/api/v5/predictions/...`, `/api/v5/market/...`) that are concatenated with the base URL, so a single host setting covers both the outcomes and market-data calls.
+
+An `unauthenticated()` client can call the public reads (events + market data); account reads (balance / orders / positions / trades) and all write calls return `SdkError::NotAuthenticated`. Each method below is marked **Auth: Required** or **Auth: Public**.
 
 ### Errors
 
@@ -107,7 +111,7 @@ Module: `okx_outcomes_sdk::models::event::*`. API impls in `okx_outcomes_sdk::ap
 Retrieve a paginated list of outcome market events.
 
 - **Endpoint:** `GET /api/v5/predictions/events`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_events(
@@ -152,7 +156,7 @@ pub struct EventObject {
 Search events and markets by keyword.
 
 - **Endpoint:** `GET /api/v5/predictions/events/search`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn search(
@@ -170,7 +174,7 @@ Response: `EventsResponse` (same shape as `get_events`).
 Retrieve a single event with its full market list inlined.
 
 - **Endpoint:** `GET /api/v5/predictions/events/{eventId}`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_event(&self, event_id: &str) -> Result<EventObject, SdkError>;
@@ -183,7 +187,7 @@ pub async fn get_event(&self, event_id: &str) -> Result<EventObject, SdkError>;
 Retrieve all markets for an event (no pagination, no list cap).
 
 - **Endpoint:** `GET /api/v5/predictions/events/{eventId}/markets`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_event_markets(&self, event_id: &str) -> Result<MarketsResponse, SdkError>;
@@ -230,7 +234,7 @@ pub struct OutcomeObject {
 Retrieve a single market.
 
 - **Endpoint:** `GET /api/v5/predictions/markets/{marketId}`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_market(&self, market_id: &str) -> Result<MarketObject, SdkError>;
@@ -603,7 +607,7 @@ These calls hit OKX's market-data API at `https://www.okx.com/api/v5/market/*` â
 Latest quote for a single instrument. `inst_id` is the market's `yes_outcome.asset_id`.
 
 - **Endpoint:** `GET /api/v5/market/ticker`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_ticker(&self, inst_id: &str) -> Result<Ticker, SdkError>;
@@ -635,7 +639,7 @@ The server returns a 1-element array; the SDK unwraps it. `Api { code: -1, messa
 K-line history.
 
 - **Endpoint:** `GET /api/v5/market/candles`
-- **Auth:** Required
+- **Auth:** Public
 
 ```rust
 pub async fn get_candles(
@@ -667,7 +671,7 @@ impl Candle {
 Outcome-market order book depth snapshot.
 
 - **Endpoint:** `GET /api/v5/market/pm-books`
-- **Auth:** Required
+- **Auth:** Public
 - **Rate limit:** 40 requests / 2s
 
 ```rust
