@@ -41,6 +41,10 @@ fn client_builder_surface_is_reachable() {
     let _ = OutcomesSdkClient::with_credentials(sample_credentials());
     let _ =
         OutcomesSdkClient::with_credentials_and_url(sample_credentials(), "https://www.okx.com");
+
+    // Unauthenticated client for public reads (events, markets, market data).
+    let _ = OutcomesSdkClient::unauthenticated();
+    let _ = OutcomesSdkClient::unauthenticated_with_url("https://www.okx.com");
 }
 
 #[test]

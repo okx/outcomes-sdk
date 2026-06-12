@@ -339,6 +339,24 @@ impl OutcomesSdkClient {
             .build()
     }
 
+    /// Create an unauthenticated client for public reads only.
+    ///
+    /// Carries no credentials, so it can call the public read endpoints —
+    /// events (`get_events`, `search`, `get_event`, `get_event_markets`,
+    /// `get_market`) and market data (`get_ticker`, `get_candles`,
+    /// `get_pm_books`). Private reads (`get_balance`, `list_orders`,
+    /// `get_order`, `get_positions`, `get_trades`) and all write calls
+    /// (`place_order`, `cancel_order`, …) return [`SdkError::NotAuthenticated`].
+    pub fn unauthenticated() -> Self {
+        Self::builder().build()
+    }
+
+    /// Create an unauthenticated client pointing at a custom base URL.
+    /// See [`unauthenticated`](Self::unauthenticated) for what it can call.
+    pub fn unauthenticated_with_url(base_url: impl Into<String>) -> Self {
+        Self::builder().base_url(base_url).build()
+    }
+
     // -- Signing ----------------------------------------
 
     /// Current UTC timestamp in the OKX format: `2020-12-08T09:08:57.715Z`.
@@ -359,12 +377,30 @@ impl OutcomesSdkClient {
         base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
     }
 
-    /// Attach the four `OK-ACCESS-*` auth headers to `builder`.
+    /// Whether the client carries any credentials — API-key or bearer token.
+    /// `false` for an [`unauthenticated`](Self::unauthenticated) client, which
+    /// can still call public reads (events, markets, market data).
+    fn is_authenticated(&self) -> bool {
+        self.credentials.is_some() || self.bearer_token.is_some()
+    }
+
+    /// Apply the per-client extra headers (trading mode, language) to `builder`.
+    fn attach_extra_headers(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        for (name, value) in self.extra_headers.iter() {
+            builder = builder.header(name, value);
+        }
+        builder
+    }
+
+    /// Attach the `OK-ACCESS-*` (or bearer) auth headers to `builder`.
     ///
-    /// All Outcomes REST endpoints require authentication; this method
-    /// returns `SdkError::NotAuthenticated` when the client was constructed
-    /// without credentials. Only `OutcomesWsClient` supports anonymous
-    /// (public-channel) usage.
+    /// Private endpoints require authentication; this method returns
+    /// `SdkError::NotAuthenticated` when the client was constructed without
+    /// credentials. Public reads use [`http_get_public`](Self::http_get_public)
+    /// instead, which does not require auth.
     fn attach_auth(
         &self,
         builder: reqwest::RequestBuilder,
@@ -375,41 +411,59 @@ impl OutcomesSdkClient {
         // OAuth bearer auth takes precedence: no request signing, just the
         // `Authorization: Bearer <token>` header plus the shared extra headers.
         if let Some(token) = &self.bearer_token {
-            let mut builder =
-                builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-            for (name, value) in self.extra_headers.iter() {
-                builder = builder.header(name, value);
-            }
-            return Ok(builder);
+            let builder = builder.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+            return Ok(self.attach_extra_headers(builder));
         }
 
         let Some(creds) = &self.credentials else {
             return Err(SdkError::NotAuthenticated {
-                hint: "build the client via OutcomesSdkClient::with_credentials \
-                       or with_credentials_and_url; all REST endpoints require auth"
+                hint: "this call requires authentication; build the client via \
+                       OutcomesSdkClient::with_credentials or with_bearer_token. \
+                       For public reads (events, markets, market data) use \
+                       OutcomesSdkClient::unauthenticated"
                     .to_string(),
             });
         };
         let ts = Self::timestamp();
         let pre_hash = format!("{ts}{method}{request_path}{body}");
         let sign = Self::sign(&creds.secret_key, &pre_hash);
-        let mut builder = builder
+        let builder = builder
             .header("OK-ACCESS-KEY", &creds.api_key)
             .header("OK-ACCESS-SIGN", sign)
             .header("OK-ACCESS-TIMESTAMP", ts)
             .header("OK-ACCESS-PASSPHRASE", &creds.passphrase);
-        for (name, value) in self.extra_headers.iter() {
-            builder = builder.header(name, value);
-        }
-        Ok(builder)
+        Ok(self.attach_extra_headers(builder))
     }
 
     // -- HTTP helpers ----------------------------------------
 
+    /// GET an authenticated (private) endpoint. Returns `NotAuthenticated` if
+    /// the client carries no credentials.
     pub(crate) async fn http_get<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(&str, &str)],
+    ) -> Result<T, SdkError> {
+        self.http_get_inner(path, params, true).await
+    }
+
+    /// GET a public endpoint (events, markets) that does not require auth.
+    /// If the client *is* authenticated the request is still signed (harmless),
+    /// so the same method works for both authenticated and unauthenticated
+    /// clients.
+    pub(crate) async fn http_get_public<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T, SdkError> {
+        self.http_get_inner(path, params, false).await
+    }
+
+    async fn http_get_inner<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        require_auth: bool,
     ) -> Result<T, SdkError> {
         let url = format!("{}{}", self.base_url, path);
         let mut builder = self.http.get(&url);
@@ -431,7 +485,15 @@ impl OutcomesSdkClient {
             format!("{path}?{qs}")
         };
 
-        builder = self.attach_auth(builder, "GET", &request_path, "")?;
+        // Private endpoints (`require_auth`) always sign — and error without
+        // credentials. Public endpoints sign only when the client happens to be
+        // authenticated; an unauthenticated client just sends the shared extra
+        // headers (trading mode / language) and no `OK-ACCESS-*`.
+        builder = if require_auth || self.is_authenticated() {
+            self.attach_auth(builder, "GET", &request_path, "")?
+        } else {
+            self.attach_extra_headers(builder)
+        };
 
         // Debug logging (which prints OK-ACCESS-* auth headers) is only honored
         // in debug builds; `debug_assertions` is off in release, so a released
@@ -657,6 +719,42 @@ mod tests {
         assert!(req.headers().get("OK-ACCESS-KEY").is_none());
         assert!(req.headers().get("OK-ACCESS-SIGN").is_none());
         assert!(req.headers().get("OK-ACCESS-PASSPHRASE").is_none());
+    }
+
+    #[test]
+    fn unauthenticated_client_attaches_no_auth_headers_to_public_reads() {
+        let client = OutcomesSdkClient::unauthenticated();
+        assert!(!client.is_authenticated());
+
+        // Public-read path for an unauthenticated client: only the shared extra
+        // headers, no OK-ACCESS-* and no Authorization.
+        let builder = client
+            .http
+            .get("https://www.okx.com/api/v5/predictions/events");
+        let req = client
+            .attach_extra_headers(builder)
+            .build()
+            .expect("request builds");
+
+        assert!(req.headers().get("OK-ACCESS-KEY").is_none());
+        assert!(req.headers().get("OK-ACCESS-SIGN").is_none());
+        assert!(req.headers().get("OK-ACCESS-PASSPHRASE").is_none());
+        assert!(req.headers().get("OK-ACCESS-TIMESTAMP").is_none());
+        assert!(req.headers().get(reqwest::header::AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn unauthenticated_client_rejects_private_calls_with_not_authenticated() {
+        // The private/write path goes through attach_auth, which must fail fast
+        // (before any network I/O) for an unauthenticated client.
+        let client = OutcomesSdkClient::unauthenticated();
+        let builder = client
+            .http
+            .get("https://www.okx.com/api/v5/predictions/balance");
+        let err = client
+            .attach_auth(builder, "GET", "/api/v5/predictions/balance", "")
+            .expect_err("private call must require auth");
+        assert!(matches!(err, SdkError::NotAuthenticated { .. }));
     }
 
     #[test]

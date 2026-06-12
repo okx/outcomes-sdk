@@ -28,6 +28,8 @@ impl OutcomesSdkClient {
     pub fn builder() -> OutcomesSdkClientBuilder;
     pub fn with_credentials(creds: ApiCredentials) -> Self;            // 快捷方式
     pub fn with_credentials_and_url(creds: ApiCredentials, base_url: impl Into<String>) -> Self;
+    pub fn unauthenticated() -> Self;                                  // 仅公共读取
+    pub fn unauthenticated_with_url(base_url: impl Into<String>) -> Self;
 }
 
 impl OutcomesSdkClientBuilder {
@@ -42,6 +44,8 @@ impl OutcomesSdkClientBuilder {
 ```
 
 Base URL 解析:显式的 `.base_url(..)` builder 值(或 `with_credentials_and_url` 参数),否则使用编译期默认值 `https://www.okx.com`。SDK 不读取任何环境变量。Endpoint 常量是完整的绝对路径(`/api/v5/predictions/...`、`/api/v5/market/...`),与 base URL 拼接,因此一个主机配置同时覆盖 Outcomes 与市场数据两类调用。
+
+`unauthenticated()` 客户端可调用公共读取接口(事件 + 行情数据);账户读取(余额 / 订单 / 持仓 / 成交)和所有写操作会返回 `SdkError::NotAuthenticated`。下面每个方法都标注了 **认证: 必需** 或 **认证: 公共**。
 
 ### 错误
 
@@ -104,7 +108,7 @@ pub enum SdkError {
 获取 Outcomes 市场事件的分页列表。
 
 - **端点:** `GET /api/v5/predictions/events`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_events(
@@ -149,7 +153,7 @@ pub struct EventObject {
 通过关键字搜索事件和市场。
 
 - **端点:** `GET /api/v5/predictions/events/search`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn search(
@@ -167,7 +171,7 @@ pub async fn search(
 获取单个事件,并内联其完整市场列表。
 
 - **端点:** `GET /api/v5/predictions/events/{eventId}`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_event(&self, event_id: &str) -> Result<EventObject, SdkError>;
@@ -180,7 +184,7 @@ pub async fn get_event(&self, event_id: &str) -> Result<EventObject, SdkError>;
 获取事件的全部市场(无分页、无列表上限)。
 
 - **端点:** `GET /api/v5/predictions/events/{eventId}/markets`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_event_markets(&self, event_id: &str) -> Result<MarketsResponse, SdkError>;
@@ -227,7 +231,7 @@ pub struct OutcomeObject {
 获取单个市场。
 
 - **端点:** `GET /api/v5/predictions/markets/{marketId}`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_market(&self, market_id: &str) -> Result<MarketObject, SdkError>;
@@ -600,7 +604,7 @@ struct RedeemAction {
 单个 instrument 的最新报价。`inst_id` 是市场的 `yes_outcome.asset_id`。
 
 - **端点:** `GET /api/v5/market/ticker`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_ticker(&self, inst_id: &str) -> Result<Ticker, SdkError>;
@@ -632,7 +636,7 @@ pub struct Ticker {
 K 线历史。
 
 - **端点:** `GET /api/v5/market/candles`
-- **认证:** 必需
+- **认证:** 公共
 
 ```rust
 pub async fn get_candles(
@@ -664,7 +668,7 @@ impl Candle {
 Outcomes 市场盘口深度快照。
 
 - **端点:** `GET /api/v5/market/pm-books`
-- **认证:** 必需
+- **认证:** 公共
 - **限频:** 40 次 / 2 秒
 
 ```rust
